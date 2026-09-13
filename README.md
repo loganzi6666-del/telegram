@@ -9,6 +9,7 @@
 - **밖에서 휴대폰만으로**: 텔레그램 대화방에 링크를 붙여넣으면 집 컴퓨터가 받아
   다시 휴대폰으로 보내줍니다 (아이폰·안드로이드 모두 동일)
 - **같은 와이파이 전송**: 받은 파일을 휴대폰 브라우저로 바로 내려받기
+- **휴대폰에서 직접 실행**: 컴퓨터 없이 안드로이드(Termux)·아이폰(a-Shell)에서 실행
 - 이어받기(중간에 끊겨도 이어서), 중복 파일 자동 건너뛰기, 진행률·속도 표시
 - 앨범(여러 개 묶음), 메시지 범위, 포럼 토픽, 댓글, 초대 링크 지원
 
@@ -21,11 +22,13 @@
 ```bash
 git clone https://github.com/loganzi6666-del/telegram.git
 cd telegram
-pip install -r requirements.txt
+pip install -r requirements.txt          # 필수 (telethon)
+pip install -r requirements-extra.txt    # 선택: 속도 향상 + 클립보드 (컴퓨터에서만)
 ```
 
-> `cryptg` 는 필수는 아니지만 설치하면 다운로드 속도가 몇 배 빨라집니다
-> (requirements.txt 에 포함되어 있습니다).
+> `requirements-extra.txt` 의 `cryptg` 는 다운로드 속도를 몇 배 높여줍니다.
+> 단, **휴대폰(Termux / a-Shell)에서는 설치하지 마세요** — C 컴파일러가 필요해
+> 실패합니다. 없어도 프로그램은 정상 동작합니다.
 
 ## 2. 텔레그램 API 키 발급 (최초 1회)
 
@@ -151,6 +154,63 @@ python -m tgdl serve --port 8080      # 포트 번호 바꾸기
 
 > 실행 중에는 같은 와이파이의 다른 사람도 접속할 수 있으니, 다 옮겼으면
 > `Ctrl+C` 로 꼭 닫아주세요.
+
+### 방법 7 — 휴대폰에서 직접 실행 (컴퓨터 없이)
+
+컴퓨터를 아예 쓰지 않고 휴대폰 안에서 프로그램을 돌립니다.
+
+#### 🤖 안드로이드 (Termux) — 잘 됩니다
+
+1. **F-Droid** 에서 **Termux** 설치 (<https://f-droid.org/packages/com.termux/>)
+   구글 플레이의 Termux 는 업데이트가 중단돼 설치가 실패합니다. 꼭 F-Droid 버전으로.
+2. Termux 를 열고 차례대로:
+
+```bash
+termux-setup-storage          # 저장 권한 허용 (팝업에서 '허용')
+pkg update -y && pkg install -y python git
+pip install telethon
+git clone -b claude/elegant-fermat-eyudcb https://github.com/loganzi6666-del/telegram.git
+cd telegram
+python -m tgdl config         # api_id / api_hash 입력
+python -m tgdl login          # 전화번호 + 인증코드
+python -m tgdl                # 링크 붙여넣기 (길게 눌러 '붙여넣기')
+```
+
+- 받은 영상은 **`/sdcard/Download/telegram`** 에 저장되고 **갤러리에서 바로** 보입니다.
+- 갤러리에 안 보이면 `pkg install -y termux-api` 를 한 번 설치해 두세요
+  (다음부터 저장 직후 자동으로 갤러리에 반영됩니다).
+- `cryptg` 는 설치하지 마세요(컴파일러가 필요해 실패합니다). 없어도 동작합니다.
+
+#### 🍎 아이폰 (a-Shell) — 되지만 손이 더 갑니다
+
+애플이 앱 밖에서 프로그램 실행을 막아두어, 터미널 앱을 거쳐야 합니다.
+
+1. App Store 에서 **a-Shell** 설치 (무료)
+2. a-Shell 을 열고:
+
+```bash
+pip install telethon
+lg2 clone https://github.com/loganzi6666-del/telegram.git    # a-Shell 의 git
+cd telegram && git checkout claude/elegant-fermat-eyudcb
+python -m tgdl config
+python -m tgdl login
+python -m tgdl
+```
+
+- `lg2 clone` 이 안 되면: 사파리로 ZIP 을 내려받아 **'파일' 앱**에서
+  `a-Shell` 폴더로 옮기고, a-Shell 에서 `unzip 파일이름.zip` 하세요.
+- 받은 영상은 **'파일' 앱 → a-Shell → Downloads/telegram** 에 있습니다.
+  공유 → **비디오 저장** 을 누르면 사진 앱으로 들어갑니다.
+- ⚠️ **a-Shell 화면을 켜둔 채로** 두세요. 다른 앱으로 넘어가면 iOS 가 다운로드를
+  멈출 수 있습니다. 끊겼으면 같은 링크를 다시 넣으면 **이어받습니다**.
+- 사진첩에 바로 저장하려면 유료 앱 **Pythonista 3** 를 쓰는 방법도 있습니다.
+
+#### 두 기종 공통 주의
+
+- 큰 영상은 데이터를 많이 씁니다. **와이파이**에서 받으세요.
+- 휴대폰이 잠기면 느려지거나 멈출 수 있습니다. 화면을 켜두는 편이 안전합니다.
+- 휴대폰에서 직접 받으면 중간 심부름꾼(컴퓨터)이 필요 없지만, 속도는
+  컴퓨터보다 느립니다(`cryptg` 를 쓸 수 없어서).
 
 ---
 

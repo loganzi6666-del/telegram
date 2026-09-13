@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -26,11 +26,53 @@ API_HELP = """
 """.strip()
 
 
+def on_termux() -> bool:
+    """안드로이드 Termux 안에서 실행 중인지."""
+    return "com.termux" in os.environ.get("PREFIX", "") or Path(
+        "/data/data/com.termux"
+    ).exists()
+
+
+def media_scan(path) -> None:
+    """안드로이드 갤러리가 새 파일을 바로 인식하도록 스캔을 요청한다.
+
+    Termux 에서 `pkg install termux-api` 를 했을 때만 동작하고,
+    없으면 조용히 넘어간다(파일은 이미 저장돼 있다).
+    """
+    import shutil
+    import subprocess
+
+    tool = shutil.which("termux-media-scan")
+    if not tool:
+        return
+    try:
+        subprocess.run(
+            [tool, str(path)],
+            timeout=20,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def default_download_dir() -> str:
+    """기본 저장 폴더.
+
+    안드로이드(Termux)에서는 갤러리에서 바로 보이는 공용 다운로드 폴더에
+    저장한다. Termux 내부 폴더에 넣으면 갤러리나 다른 앱이 볼 수 없다.
+    """
+    if on_termux():
+        return "/sdcard/Download/telegram"
+    return str(Path.home() / "Downloads" / "telegram")
+
+
 @dataclass
 class Config:
     api_id: int = 0
     api_hash: str = ""
-    download_dir: str = str(Path.home() / "Downloads" / "telegram")
+    download_dir: str = field(default_factory=default_download_dir)
     concurrency: int = 2
     media: str = "video"  # "video" 또는 "all"
     per_chat_folder: bool = True

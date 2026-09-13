@@ -1,0 +1,11 @@
+# 컴퓨터(윈도우/맥/리눅스)에서만 쓰는 선택 항목.
+# 휴대폰(Termux / a-Shell)에서는 설치하지 마세요 — C 컴파일러가 필요해 실패합니다.
+
+# 다운로드 속도를 크게 높여주는 암호화 가속 모듈
+cryptg>=0.4
+
+# `python -m tgdl watch` 에서 클립보드를 읽는 데 사용
+pyperclip>=1.8
+
+# 프록시(socks5) 사용 시
+# python-socks[asyncio]>=2.4

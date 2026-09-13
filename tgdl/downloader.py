@@ -13,7 +13,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from telethon import errors
 from telethon.tl.functions.messages import (
@@ -105,6 +105,9 @@ class Downloader:
         self.limit = max(1, int(limit))
         self.max_retries = max(0, int(max_retries))
         self.stats = Stats()
+
+        #: 파일 저장이 끝난 뒤 호출되는 선택적 훅(안드로이드 갤러리 갱신 등)
+        self.after_save: Optional[Callable[[Path], None]] = None
 
         self._sem = asyncio.Semaphore(self.concurrency)
         self._dialogs_loaded = False
@@ -422,6 +425,11 @@ class Downloader:
                     await asyncio.sleep(backoff)
 
             os.replace(part, dest)
+            if self.after_save is not None:
+                try:
+                    self.after_save(dest)
+                except Exception as exc:  # noqa: BLE001 - 후처리 실패는 치명적이지 않다
+                    self.reporter.log(f"저장 후 처리 실패(무시): {exc}", "warn")
             self.stats.downloaded += 1
             self.stats.bytes += total or dest.stat().st_size
             self.reporter.finished(key, label, dest)

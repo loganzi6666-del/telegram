@@ -225,6 +225,37 @@ def test_failure_is_recorded_not_raised():
         assert not list(Path(tmp).rglob("*.mp4")), "실패한 파일은 남기지 않는다"
 
 
+def test_after_save_hook_gets_final_path():
+    """안드로이드 갤러리 갱신 훅은 .part 가 아닌 최종 파일 경로를 받아야 한다."""
+    payload = os.urandom(4096)
+    with tempfile.TemporaryDirectory() as tmp:
+        downloader = make_downloader(tmp, FakeClient(payload), CollectingReporter())
+        seen = []
+        downloader.after_save = seen.append
+        asyncio.run(downloader._download(FakeMessage(12, len(payload)), FakeEntity()))
+
+        assert len(seen) == 1
+        assert seen[0].suffix == ".mp4" and ".part" not in seen[0].name
+        assert seen[0].exists()
+
+
+def test_after_save_failure_does_not_break_download():
+    payload = os.urandom(4096)
+    with tempfile.TemporaryDirectory() as tmp:
+        reporter = CollectingReporter()
+        downloader = make_downloader(tmp, FakeClient(payload), reporter)
+
+        def boom(path):
+            raise RuntimeError("갤러리 갱신 실패")
+
+        downloader.after_save = boom
+        asyncio.run(downloader._download(FakeMessage(13, len(payload)), FakeEntity()))
+
+        assert downloader.stats.downloaded == 1, "후처리 실패는 다운로드를 망치지 않는다"
+        assert downloader.stats.failed == 0
+        assert any("무시" in message for _, message in reporter.logs)
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failed = 0

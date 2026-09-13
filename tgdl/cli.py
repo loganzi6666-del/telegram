@@ -26,6 +26,8 @@ from .config import (
     Config,
     config_path,
     load_config,
+    media_scan,
+    on_termux,
     parse_proxy,
     save_config,
     session_path,
@@ -136,6 +138,32 @@ def collect_targets(args: argparse.Namespace, reporter: ConsoleReporter) -> List
     return links
 
 
+def ensure_download_dir(cfg: Config, reporter) -> Path:
+    """저장 폴더를 만들고 쓸 수 있는지 확인한다. 안 되면 대체 폴더를 쓴다."""
+    folder = Path(cfg.download_dir).expanduser()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".tgdl-write-test"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return folder
+    except OSError as exc:
+        reporter.log(f"{folder} 에 저장할 수 없습니다 ({exc.strerror or exc}).", "warn")
+        if on_termux():
+            reporter.log(
+                "Termux 라면 먼저 `termux-setup-storage` 를 실행해 저장 권한을 허용하세요.",
+                "warn",
+            )
+        fallback = Path.home() / "tgdl-downloads"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError as exc2:
+            raise SystemExit(f"저장 폴더를 만들 수 없습니다: {exc2}")
+        reporter.log(f"대신 여기에 저장합니다: {fallback}", "warn")
+        cfg.download_dir = str(fallback)
+        return fallback
+
+
 async def make_client(cfg: Config, reporter: ConsoleReporter):
     from telethon import TelegramClient
 
@@ -198,7 +226,7 @@ async def start_client(client, reporter: ConsoleReporter) -> None:
 
 
 def make_downloader(client, cfg: Config, args: argparse.Namespace, reporter) -> Downloader:
-    return Downloader(
+    downloader = Downloader(
         client,
         reporter,
         out_dir=cfg.download_dir,
@@ -209,6 +237,10 @@ def make_downloader(client, cfg: Config, args: argparse.Namespace, reporter) -> 
         overwrite=args.overwrite,
         limit=cfg.limit,
     )
+    if on_termux():
+        # 안드로이드: 받은 영상이 갤러리에 바로 보이게 한다.
+        downloader.after_save = media_scan
+    return downloader
 
 
 async def run_interactive(pump: LinkPump, reporter: ConsoleReporter) -> None:
@@ -321,9 +353,9 @@ async def amain(command: str, args: argparse.Namespace) -> int:
         await client.disconnect()
         return 0
 
+    folder = ensure_download_dir(cfg, reporter)
     downloader = make_downloader(client, cfg, args, reporter)
-    Path(cfg.download_dir).expanduser().mkdir(parents=True, exist_ok=True)
-    reporter.log(f"저장 폴더: {Path(cfg.download_dir).expanduser()}")
+    reporter.log(f"저장 폴더: {folder}")
 
     if command == "listen":
         from .listen import run_listen

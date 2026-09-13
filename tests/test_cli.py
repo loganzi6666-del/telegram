@@ -9,8 +9,19 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tgdl.cli import apply_overrides, build_parser, collect_targets, split_argv  # noqa: E402
-from tgdl.config import Config, parse_proxy  # noqa: E402
+from tgdl.cli import (  # noqa: E402
+    apply_overrides,
+    build_parser,
+    collect_targets,
+    ensure_download_dir,
+    split_argv,
+)
+from tgdl.config import (  # noqa: E402
+    Config,
+    default_download_dir,
+    on_termux,
+    parse_proxy,
+)
 from tgdl.reporter import ConsoleReporter, human_size, human_time  # noqa: E402
 
 
@@ -105,6 +116,46 @@ def test_human_helpers():
     assert human_time(0) == "--:--"
     assert human_time(75) == "01:15"
     assert human_time(3725) == "1:02:05"
+
+
+def test_termux_gets_shared_download_folder():
+    """Termux 내부 폴더에 저장하면 갤러리가 볼 수 없으므로 공용 폴더를 써야 한다."""
+    saved = os.environ.get("PREFIX")
+    try:
+        os.environ.pop("PREFIX", None)
+        if not on_termux():  # 실제 Termux 에서 테스트할 때는 건너뛴다
+            assert default_download_dir().endswith(os.path.join("Downloads", "telegram"))
+        os.environ["PREFIX"] = "/data/data/com.termux/files/usr"
+        assert on_termux() is True
+        assert default_download_dir() == "/sdcard/Download/telegram"
+        assert Config().download_dir == "/sdcard/Download/telegram"
+    finally:
+        os.environ.pop("PREFIX", None)
+        if saved is not None:
+            os.environ["PREFIX"] = saved
+
+
+def test_download_dir_falls_back_when_not_writable():
+    reporter = ConsoleReporter(single_line=False)
+    saved_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as home:
+        try:
+            os.environ["HOME"] = home
+            cfg = Config(download_dir="/proc/tgdl-cannot-create/here")
+            folder = ensure_download_dir(cfg, reporter)
+            assert folder == Path(home) / "tgdl-downloads"
+            assert folder.is_dir()
+            assert cfg.download_dir == str(folder), "설정도 대체 폴더로 갱신돼야 한다"
+
+            good = Path(home) / "받은영상"
+            cfg2 = Config(download_dir=str(good))
+            assert ensure_download_dir(cfg2, reporter) == good
+            assert good.is_dir()
+            assert not list(good.iterdir()), "쓰기 확인용 파일은 남기지 않는다"
+        finally:
+            os.environ.pop("HOME", None)
+            if saved_home is not None:
+                os.environ["HOME"] = saved_home
 
 
 def main() -> int:
