@@ -55,6 +55,9 @@ class ConsoleReporter(Reporter):
 
     PREFIX = {"info": "", "ok": "✔ ", "warn": "⚠ ", "error": "✖ "}
 
+    #: 여러 줄 모드에서 진행 상황을 다시 찍는 최소 간격(초)
+    MULTILINE_INTERVAL = 5.0
+
     def __init__(self, single_line: bool = True, stream=None) -> None:
         self.stream = stream or sys.stderr
         self.single_line = bool(single_line) and getattr(self.stream, "isatty", lambda: False)()
@@ -88,10 +91,16 @@ class ConsoleReporter(Reporter):
             if now - state["last"] < 0.2 and not finished:
                 return
         else:
+            # 줄을 새로 찍는 방식: 10% 단위마다, 그리고 최소 몇 초마다 한 번씩
+            # (큰 파일에서 10%를 채우는 데 오래 걸려 멈춘 것처럼 보이지 않도록)
             step = int((done / total) * 10) if total else 0
-            if step <= state["step"] and not finished:
+            if (
+                step <= state["step"]
+                and now - state["last"] < self.MULTILINE_INTERVAL
+                and not finished
+            ):
                 return
-            state["step"] = step
+            state["step"] = max(step, state["step"])
         state["last"] = now
 
         elapsed = max(now - state["t0"], 1e-6)

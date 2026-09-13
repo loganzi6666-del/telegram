@@ -5,6 +5,9 @@
   python -m tgdl <링크> [<링크> …]      링크를 바로 다운로드
   python -m tgdl watch                 클립보드 감시 (복사하면 자동 다운로드)
   python -m tgdl gui                   간단한 창 모드
+  python -m tgdl serve                 받은 파일을 휴대폰(아이폰)으로 옮기기
+  python -m tgdl listen                텔레그램으로 링크를 보내면 받아서 되돌려줌
+                                       (밖에서 휴대폰만으로 사용)
   python -m tgdl login                 텔레그램 로그인만 수행
   python -m tgdl config                api_id / api_hash / 저장 폴더 설정
   python -m tgdl logout                로그인 세션 삭제
@@ -32,7 +35,7 @@ from .downloader import Downloader, LinkPump
 from .links import extract_links, parse_link, LinkError
 from .reporter import ConsoleReporter
 
-COMMANDS = {"get", "watch", "gui", "login", "logout", "config", "help"}
+COMMANDS = {"get", "watch", "gui", "serve", "listen", "login", "logout", "config", "help"}
 QUIT_WORDS = {"q", "quit", "exit", "종료", "끝"}
 
 BANNER = f"""텔레그램 동영상 다운로더 (tgdl {__version__})
@@ -65,6 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--from-file", help="링크가 줄바꿈으로 적힌 파일에서 읽기")
     parser.add_argument("--proxy", help="프록시 (예: socks5://127.0.0.1:1080)")
     parser.add_argument("--interval", type=float, default=1.0, help="클립보드 확인 간격(초)")
+    parser.add_argument(
+        "--port", type=int, default=8000, help="serve: 휴대폰이 접속할 포트 번호 (기본 8000)"
+    )
+    parser.add_argument(
+        "--chat",
+        default="me",
+        help="listen: 감시할 대화방 (기본 me = 저장한 메시지, 예: @내봇, 채널이름)",
+    )
+    parser.add_argument(
+        "--no-send", action="store_true", help="listen: 받은 파일을 되돌려 보내지 않기"
+    )
     parser.add_argument("--show", action="store_true", help="config: 현재 설정만 보기")
     parser.add_argument("--version", action="version", version=f"tgdl {__version__}")
     return parser
@@ -311,6 +325,24 @@ async def amain(command: str, args: argparse.Namespace) -> int:
     Path(cfg.download_dir).expanduser().mkdir(parents=True, exist_ok=True)
     reporter.log(f"저장 폴더: {Path(cfg.download_dir).expanduser()}")
 
+    if command == "listen":
+        from .listen import run_listen
+
+        try:
+            await run_listen(
+                client,
+                reporter,
+                lambda rep: make_downloader(client, cfg, args, rep),
+                chat=args.chat,
+                send_back=not args.no_send,
+            )
+        except KeyboardInterrupt:
+            reporter.log("감시를 멈췄습니다.", "warn")
+        finally:
+            reporter.log(downloader.stats.summary())
+            await client.disconnect()
+        return 0
+
     pump = LinkPump(downloader)
     try:
         if command == "watch":
@@ -349,6 +381,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         from .gui import run_gui
 
         return run_gui(args)
+
+    if command == "serve":
+        from .serve import run_server
+
+        cfg = apply_overrides(load_config(), args)
+        return run_server(cfg.download_dir, args.port)
 
     try:
         import telethon  # noqa: F401
