@@ -5,9 +5,9 @@
   python -m tgdl <링크> [<링크> …]      링크를 바로 다운로드
   python -m tgdl watch                 클립보드 감시 (복사하면 자동 다운로드)
   python -m tgdl gui                   간단한 창 모드
-  python -m tgdl serve                 받은 파일을 휴대폰(아이폰)으로 옮기기
+  python -m tgdl serve                 받은 파일을 휴대폰으로 옮기기        
   python -m tgdl listen                텔레그램으로 링크를 보내면 받아서 되돌려줌
-                                       (밖에서 휴대폰만으로 사용)
+                                       (밖에서 휴대폰만으로 사용 · 기종 무관)
   python -m tgdl login                 텔레그램 로그인만 수행
   python -m tgdl config                api_id / api_hash / 저장 폴더 설정
   python -m tgdl logout                로그인 세션 삭제

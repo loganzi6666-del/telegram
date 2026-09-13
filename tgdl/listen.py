@@ -1,6 +1,7 @@
 """텔레그램 채팅방을 감시해, 내가 붙여넣은 링크를 자동으로 받아 되돌려주는 모드.
 
 밖에서 휴대폰으로 링크만 보내면 집 컴퓨터가 받아서 다시 보내준다.
+텔레그램만 있으면 아이폰·안드로이드·태블릿·PC 어디서나 똑같이 쓸 수 있다.
 봇(BotFather)은 파일 전송이 50MB 로 막혀 있어 큰 동영상을 보낼 수 없으므로,
 내 계정으로 직접 보낸다(최대 2GB, 프리미엄 4GB).
 
@@ -27,7 +28,8 @@ HELP_TEXT = (
     "집 컴퓨터가 받아서 여기로 다시 보내드립니다.\n\n"
     "· 여러 링크를 한 번에 붙여넣어도 됩니다\n"
     "· 비공개 채널도 내 계정이 가입돼 있으면 받을 수 있습니다\n"
-    "· 받은 영상을 꾹 눌러 '동영상 저장'을 누르면 사진첩에 들어갑니다"
+    "· 받은 영상을 꾹 눌러 저장하면 사진첩(갤러리)에 들어갑니다\n"
+    "  아이폰: '동영상 저장' · 안드로이드: '갤러리에 저장'"
 )
 
 
@@ -176,7 +178,10 @@ class ListenService:
             total = sum(self._size(path) for path in state.paths)
             if self.send_back:
                 lines.append(f"✅ 완료 — {len(state.paths)}개 보냈습니다 ({human_size(total)})")
-                lines.append("영상을 꾹 눌러 '동영상 저장'을 누르면 사진첩에 저장됩니다.")
+                lines.append(
+                    "영상을 꾹 눌러 저장하세요 — "
+                    "아이폰은 '동영상 저장', 안드로이드는 '갤러리에 저장'."
+                )
             else:
                 lines.append(f"✅ 완료 — 컴퓨터에 {len(state.paths)}개 저장했습니다")
             for path in state.paths:
@@ -200,14 +205,14 @@ class ListenService:
     # ------------------------------------------------------------------ 전송
     async def _upload(self, status, state: RequestState, path: Path, reply_to=None) -> None:
         size = self._size(path)
-        state.line = f"⬆️ 아이폰으로 보내는 중 0%\n{path.name}\n{human_size(size)}"
+        state.line = f"⬆️ 휴대폰으로 보내는 중 0%\n{path.name}\n{human_size(size)}"
         sent = {"value": 0}
 
         def on_progress(current, total):  # Telethon 이 동기로 호출한다
             sent["value"] = current
             percent = (current / total * 100) if total else 0
             state.line = (
-                f"⬆️ 아이폰으로 보내는 중 {percent:.0f}%\n"
+                f"⬆️ 휴대폰으로 보내는 중 {percent:.0f}%\n"
                 f"{path.name}\n{human_size(current)} / {human_size(total or size)}"
             )
 
@@ -221,7 +226,7 @@ class ListenService:
                 progress_callback=on_progress,
                 reply_to=reply_to,
             )
-            self.console.log(f"아이폰으로 전송 완료: {path.name}", "ok")
+            self.console.log(f"휴대폰으로 전송 완료: {path.name}", "ok")
         except Exception as exc:  # noqa: BLE001
             message = str(exc) or exc.__class__.__name__
             if "too big" in message.lower() or "file size" in message.lower():

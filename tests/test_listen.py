@@ -163,7 +163,9 @@ def test_process_downloads_then_sends_back():
 
             assert "✅ 완료" in client.last_edit
             assert "영상_1.mp4" in client.last_edit
+            # 아이폰·안드로이드 둘 다 안내해야 한다
             assert "동영상 저장" in client.last_edit
+            assert "갤러리에 저장" in client.last_edit
             assert client.sent[0][1] == 7  # 원래 메시지에 답장으로 상태 표시
 
     asyncio.run(scenario())

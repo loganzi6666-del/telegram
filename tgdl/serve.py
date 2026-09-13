@@ -1,7 +1,7 @@
-"""받은 파일을 같은 와이파이의 휴대폰(아이폰/안드로이드)으로 옮기는 간단한 웹 서버.
+"""받은 파일을 같은 와이파이의 휴대폰(아이폰·안드로이드)으로 옮기는 간단한 웹 서버.
 
-아이폰 사파리는 동영상 링크를 누르면 그냥 재생해 버리므로, 여기서는
-``Content-Disposition: attachment`` 를 붙여 '파일' 앱에 저장되도록 한다.
+휴대폰 브라우저는 동영상 링크를 누르면 그냥 재생해 버리므로, 여기서는
+``Content-Disposition: attachment`` 를 붙여 파일로 저장되도록 한다.
 추가 설치가 필요 없고, 파이썬 기본 기능만 사용한다.
 """
 
@@ -136,8 +136,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 <title>받은 동영상</title><style>{PAGE_STYLE}</style></head>
 <body>
 <h1>받은 동영상</h1>
-<p class="hint">파일 이름을 누르면 휴대폰의 <b>'파일'</b> 앱에 저장됩니다.<br>
-저장한 뒤 파일 앱에서 공유 → <b>'비디오 저장'</b> 을 누르면 사진첩으로 들어갑니다.</p>
+<p class="hint">파일 이름을 누르면 휴대폰에 저장됩니다.<br>
+· <b>아이폰</b>: '파일' 앱 → 공유 → <b>'비디오 저장'</b> → 사진첩<br>
+· <b>안드로이드</b>: '다운로드' 폴더에 저장 (갤러리에서 바로 보입니다)</p>
 <ul>
 {body}
 </ul>
@@ -174,7 +175,8 @@ def run_server(directory: str, port: int = 8000) -> int:
 
     address = f"http://{lan_ip()}:{port}"
     print("=" * 52)
-    print("  휴대폰(아이폰)에서 아래 주소를 사파리에 입력하세요")
+    print("  휴대폰에서 아래 주소를 브라우저에 입력하세요")
+    print("  (아이폰: 사파리 · 안드로이드: 크롬)")
     print()
     print(f"        {address}")
     print()
