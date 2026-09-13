@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tgdl"
+version = "1.0.0"
+description = "텔레그램 링크를 붙여넣으면 동영상을 자동으로 내려받는 도구 (비공개 채널 지원)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["telethon>=1.36,<2"]
+
+[project.optional-dependencies]
+speed = ["cryptg>=0.4"]
+clipboard = ["pyperclip>=1.8"]
+proxy = ["python-socks[asyncio]>=2.4"]
+
+[project.scripts]
+tgdl = "tgdl.cli:main"
+
+[tool.setuptools]
+packages = ["tgdl"]

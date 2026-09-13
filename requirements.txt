@@ -1,0 +1,12 @@
+# 필수
+telethon>=1.36,<2
+
+# 권장: 다운로드 속도를 크게 높여주는 암호화 가속 모듈
+cryptg>=0.4
+
+# 선택: `python -m tgdl watch` 에서 클립보드를 읽는 데 사용
+#        (리눅스에서 xclip/wl-clipboard 가 있으면 없어도 동작)
+pyperclip>=1.8
+
+# 선택: 프록시(socks5) 사용 시 필요
+# python-socks[asyncio]>=2.4
