@@ -256,6 +256,24 @@ def test_after_save_failure_does_not_break_download():
         assert any("무시" in message for _, message in reporter.logs)
 
 
+def test_falls_back_to_single_connection_when_parallel_unavailable():
+    """병렬 방식을 쓸 수 없으면 경고를 남기고 기본 방식으로 받아야 한다."""
+    payload = os.urandom(CHUNK_SIZE + 77)
+    with tempfile.TemporaryDirectory() as tmp:
+        client = FakeClient(payload)  # 병렬 연결을 지원하지 않는 가짜 클라이언트
+        reporter = CollectingReporter()
+        downloader = make_downloader(tmp, client, reporter, connections=8)
+        assert downloader.connections == 8
+
+        asyncio.run(downloader._download(FakeMessage(21, len(payload)), FakeEntity()))
+
+        target = Path(tmp) / "테스트 채널" / "20260203_21_clip.mp4"
+        assert target.read_bytes() == payload, "전환해도 파일은 정확해야 한다"
+        assert client.offsets == [0]
+        assert any("기본 방식" in message for _, message in reporter.logs)
+        assert downloader.connections == 1, "한 번 전환하면 이후에도 기본 방식을 쓴다"
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failed = 0

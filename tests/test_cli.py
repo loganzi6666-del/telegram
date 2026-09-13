@@ -41,7 +41,7 @@ def test_links_as_positional_args():
     command, args = parse(["https://t.me/a/1", "https://t.me/c/2/3"])
     assert command == "get"
     assert args.targets == ["https://t.me/a/1", "https://t.me/c/2/3"]
-    links = collect_targets(args, ConsoleReporter(single_line=False))
+    links = collect_targets(args, ConsoleReporter(live=False))
     assert [link.describe() for link in links] == [
         "@a / 메시지 1",
         "비공개채널 2 / 메시지 3",
@@ -71,7 +71,7 @@ def test_collect_targets_from_file_and_bad_input():
             encoding="utf-8",
         )
         _, args = parse(["--from-file", str(path), "not-a-link"])
-        links = collect_targets(args, ConsoleReporter(single_line=False))
+        links = collect_targets(args, ConsoleReporter(live=False))
         assert len(links) == 2, [link.raw for link in links]
 
 
@@ -136,7 +136,7 @@ def test_termux_gets_shared_download_folder():
 
 
 def test_download_dir_falls_back_when_not_writable():
-    reporter = ConsoleReporter(single_line=False)
+    reporter = ConsoleReporter(live=False)
     saved_home = os.environ.get("HOME")
     with tempfile.TemporaryDirectory() as home:
         try:

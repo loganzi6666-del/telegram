@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-c", "--concurrency", type=int, help="동시에 받을 파일 수 (기본 2)"
     )
     parser.add_argument(
+        "--connections",
+        type=int,
+        help="파일 하나를 받을 때 쓸 연결 수 (기본 4, 최대 16). 클수록 빠릅니다",
+    )
+    parser.add_argument(
         "--all", action="store_true", help="동영상뿐 아니라 사진·문서 등 모든 첨부 받기"
     )
     parser.add_argument("--overwrite", action="store_true", help="같은 파일이 있어도 다시 받기")
@@ -98,6 +103,8 @@ def apply_overrides(cfg: Config, args: argparse.Namespace) -> Config:
         cfg.download_dir = str(Path(args.out).expanduser())
     if args.concurrency:
         cfg.concurrency = max(1, min(8, args.concurrency))
+    if args.connections:
+        cfg.connections = max(1, min(16, args.connections))
     if args.all:
         cfg.media = "all"
     if args.limit:
@@ -236,6 +243,7 @@ def make_downloader(client, cfg: Config, args: argparse.Namespace, reporter) -> 
         include_album=not args.no_album,
         overwrite=args.overwrite,
         limit=cfg.limit,
+        connections=cfg.connections,
     )
     if on_termux():
         # 안드로이드: 받은 영상이 갤러리에 바로 보이게 한다.
@@ -310,7 +318,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"api_id    : {cfg.api_id or '(없음)'}")
         print(f"api_hash  : {'설정됨' if cfg.api_hash else '(없음)'}")
         print(f"저장 폴더 : {cfg.download_dir}")
-        print(f"동시 개수 : {cfg.concurrency}")
+        print(f"동시 파일 : {cfg.concurrency}개")
+        print(f"연결 수   : {cfg.connections}개 (파일당)")
         print(f"받을 종류 : {'모든 첨부' if cfg.media == 'all' else '동영상만'}")
         print(f"채널 폴더 : {'사용' if cfg.per_chat_folder else '사용 안 함'}")
         print(f"프록시    : {cfg.proxy or '(없음)'}")
@@ -342,9 +351,8 @@ async def amain(command: str, args: argparse.Namespace) -> int:
         cfg = setup_wizard(cfg, ask_all=True)
         cfg = apply_overrides(cfg, args)
 
-    links = collect_targets(args, ConsoleReporter(single_line=False)) if command == "get" else []
-    single_line = cfg.concurrency == 1 or (command == "get" and len(links) == 1)
-    reporter = ConsoleReporter(single_line=single_line)
+    links = collect_targets(args, ConsoleReporter(live=False)) if command == "get" else []
+    reporter = ConsoleReporter()
 
     client = await make_client(cfg, reporter)
     await start_client(client, reporter)
@@ -371,6 +379,7 @@ async def amain(command: str, args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             reporter.log("감시를 멈췄습니다.", "warn")
         finally:
+            await downloader.aclose()
             reporter.log(downloader.stats.summary())
             await client.disconnect()
         return 0
@@ -388,6 +397,7 @@ async def amain(command: str, args: argparse.Namespace) -> int:
         reporter.log("중단합니다…", "warn")
     finally:
         await pump.close()
+        await downloader.aclose()
         reporter.log(downloader.stats.summary())
         await client.disconnect()
 

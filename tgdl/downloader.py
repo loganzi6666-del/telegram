@@ -23,6 +23,12 @@ from telethon.tl.functions.messages import (
 )
 from telethon.tl.types import InputMessagesFilterVideo, PeerChannel
 
+from .fastdl import (
+    ParallelUnavailable,
+    SenderPool,
+    clamp_connections,
+    download_parallel,
+)
 from .links import ParsedLink
 from .reporter import Reporter, human_size
 
@@ -93,6 +99,7 @@ class Downloader:
         overwrite: bool = False,
         limit: int = 200,
         max_retries: int = 4,
+        connections: int = 4,
     ) -> None:
         self.client = client
         self.reporter = reporter
@@ -104,6 +111,10 @@ class Downloader:
         self.overwrite = overwrite
         self.limit = max(1, int(limit))
         self.max_retries = max(0, int(max_retries))
+        #: 파일 하나를 받을 때 동시에 쓸 연결 수(1이면 기본 방식)
+        self.connections = clamp_connections(connections)
+        #: 여러 파일에서 재사용하는 연결 풀
+        self._pool = SenderPool(client, self.connections)
         self.stats = Stats()
 
         #: 파일 저장이 끝난 뒤 호출되는 선택적 훅(안드로이드 갤러리 갱신 등)
@@ -332,21 +343,53 @@ class Downloader:
                 return candidate
         return path.with_name(f"{stem}_{int(time.time())}{ext}")
 
-    async def _stream(self, msg, part: Path, total: int, key: str, label: str) -> None:
-        """``.part`` 파일에 이어받기 방식으로 저장한다."""
-        start = part.stat().st_size if part.exists() else 0
-        start = (start // CHUNK_SIZE) * CHUNK_SIZE
+    @staticmethod
+    def _resume_offset(size: int, total: int) -> int:
+        """이어받기를 시작할 지점(조각 경계에 맞춘다)."""
+        start = (max(0, int(size)) // CHUNK_SIZE) * CHUNK_SIZE
         if total and start >= total:
             start = max(0, ((total - 1) // CHUNK_SIZE) * CHUNK_SIZE)
+        return start
+
+    async def _stream(self, msg, part: Path, total: int, key: str, label: str) -> None:
+        """``.part`` 파일에 이어받기 방식으로 저장한다."""
+        start = self._resume_offset(part.stat().st_size if part.exists() else 0, total)
         if start:
             self.reporter.log(f"이어받기: {label} — {human_size(start)} 지점부터")
 
         mode = "r+b" if part.exists() else "wb"
-        done = start
         with open(part, mode) as handle:
             handle.truncate(start)
+            self.reporter.progress(key, label, start, total)
+
+            # 1) 빠른 방식: 여러 연결로 동시에 받는다.
+            if self.connections > 1 and total:
+                try:
+                    await download_parallel(
+                        self._pool,
+                        msg.media,
+                        handle,
+                        total=total,
+                        start=start,
+                        on_progress=lambda done: self.reporter.progress(
+                            key, label, done, total
+                        ),
+                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    return
+                except ParallelUnavailable as exc:
+                    # 구조적으로 불가능한 경우에만 기본 방식으로 되돌린다.
+                    self.reporter.log(
+                        f"빠른 다운로드를 쓸 수 없어 기본 방식으로 받습니다 ({exc})", "warn"
+                    )
+                    self.connections = 1
+                    handle.flush()
+                    start = self._resume_offset(os.fstat(handle.fileno()).st_size, total)
+
+            # 2) 기본 방식: 연결 하나로 순서대로 받는다.
             handle.seek(start)
-            self.reporter.progress(key, label, done, total)
+            done = start
             async for chunk in self.client.iter_download(
                 msg.media, offset=start, chunk_size=CHUNK_SIZE
             ):
@@ -442,6 +485,10 @@ class Downloader:
             self.reporter.failed(key, label, message)
         finally:
             self._active_paths.discard(dest)
+
+    async def aclose(self) -> None:
+        """열어둔 연결을 정리한다."""
+        await self._pool.close()
 
     # ------------------------------------------------------------------ 진입
     async def process(self, link: ParsedLink) -> None:

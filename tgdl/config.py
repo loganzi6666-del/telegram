@@ -73,7 +73,8 @@ class Config:
     api_id: int = 0
     api_hash: str = ""
     download_dir: str = field(default_factory=default_download_dir)
-    concurrency: int = 2
+    concurrency: int = 2  # 동시에 받을 파일 수
+    connections: int = 4  # 파일 하나에 쓸 연결 수(클수록 빠름, 최대 16)
     media: str = "video"  # "video" 또는 "all"
     per_chat_folder: bool = True
     limit: int = 200  # 메시지 번호 없는 링크에서 탐색할 최대 개수
@@ -130,6 +131,7 @@ def load_config() -> Config:
     except (TypeError, ValueError):
         cfg.api_id = 0
     cfg.concurrency = max(1, min(8, int(cfg.concurrency or 1)))
+    cfg.connections = max(1, min(16, int(cfg.connections or 4)))
     if cfg.media not in {"video", "all"}:
         cfg.media = "video"
     return cfg
