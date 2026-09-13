@@ -11,6 +11,7 @@
   python -m tgdl login                 텔레그램 로그인만 수행
   python -m tgdl config                api_id / api_hash / 저장 폴더 설정
   python -m tgdl logout                로그인 세션 삭제
+  python -m tgdl update                최신 코드로 갱신 (git 필요)
 """
 
 from __future__ import annotations
@@ -37,7 +38,18 @@ from .downloader import Downloader, LinkPump
 from .links import extract_links, parse_link, LinkError
 from .reporter import ConsoleReporter
 
-COMMANDS = {"get", "watch", "gui", "serve", "listen", "login", "logout", "config", "help"}
+COMMANDS = {
+    "get",
+    "watch",
+    "gui",
+    "serve",
+    "listen",
+    "login",
+    "logout",
+    "config",
+    "update",
+    "help",
+}
 QUIT_WORDS = {"q", "quit", "exit", "종료", "끝"}
 
 BANNER = f"""텔레그램 동영상 다운로더 (tgdl {__version__})
@@ -418,6 +430,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_config(args)
     if command == "logout":
         return cmd_logout()
+
+    if command == "update":
+        from .selfupdate import run_update
+
+        return run_update()
 
     if command == "gui":
         from .gui import run_gui

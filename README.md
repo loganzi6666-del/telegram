@@ -21,11 +21,22 @@
 파이썬 3.9 이상이 필요합니다.
 
 ```bash
-git clone https://github.com/loganzi6666-del/telegram.git
+git clone -b claude/elegant-fermat-eyudcb https://github.com/loganzi6666-del/telegram.git
 cd telegram
-pip install -r requirements.txt          # 필수 (telethon)
-pip install -r requirements-extra.txt    # 선택: 속도 향상 + 클립보드 (컴퓨터에서만)
+python -m pip install -r requirements.txt          # 필수 (telethon)
+python -m pip install -r requirements-extra.txt    # 선택: 속도 향상 + 클립보드 (컴퓨터에서만)
 ```
+
+### 업데이트
+
+git 으로 받았으면 한 줄로 갱신됩니다.
+
+```bash
+python -m tgdl update
+```
+
+바뀐 내용을 보여주고, 필요한 모듈도 맞춰 설치합니다.
+(`git pull` 을 직접 해도 됩니다. 갱신할 게 없으면 "이미 최신입니다" 라고만 나옵니다.)
 
 > `requirements-extra.txt` 의 `cryptg` 는 다운로드 속도를 몇 배 높여줍니다.
 > 단, **휴대폰(Termux / a-Shell)에서는 설치하지 마세요** — C 컴파일러가 필요해
@@ -263,7 +274,7 @@ python -m tgdl
 | `--port <번호>` | `serve`: 휴대폰이 접속할 포트 번호 (기본 8000) |
 
 기타 명령: `python -m tgdl config --show` (설정 보기), `python -m tgdl logout`
-(로그인 세션 삭제), `python -m tgdl help`
+(로그인 세션 삭제), `python -m tgdl update` (최신 코드로 갱신), `python -m tgdl help`
 
 ## 8. 저장 방식
 
@@ -334,6 +345,7 @@ python tests/test_cli.py          # 옵션 처리
 python tests/test_fastdl.py       # 병렬 다운로드 (구멍 없는 이어받기 포함)
 python tests/test_listen.py       # 텔레그램 감시·되돌려보내기
 python tests/test_serve.py        # 와이파이 전송 서버
+python tests/test_update.py       # 자동 갱신
 ```
 
 ## 12. 주의
