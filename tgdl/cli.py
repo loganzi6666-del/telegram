@@ -98,6 +98,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-send", action="store_true", help="listen: 받은 파일을 되돌려 보내지 않기"
     )
+    parser.add_argument(
+        "--poll",
+        type=float,
+        default=15.0,
+        help="listen: 대화방을 직접 확인하는 간격(초). 0 이면 확인 안 함 (기본 15)",
+    )
+    parser.add_argument(
+        "--catch-up",
+        type=int,
+        nargs="?",
+        const=20,
+        default=0,
+        help="listen: 시작할 때 최근 메시지에서 링크를 찾아 처리 (기본 20개)",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="무슨 메시지가 오는지 자세히 표시"
+    )
     parser.add_argument("--show", action="store_true", help="config: 현재 설정만 보기")
     parser.add_argument("--version", action="version", version=f"tgdl {__version__}")
     return parser
@@ -387,6 +404,9 @@ async def amain(command: str, args: argparse.Namespace) -> int:
                 lambda rep: make_downloader(client, cfg, args, rep),
                 chat=args.chat,
                 send_back=not args.no_send,
+                poll_interval=args.poll,
+                catch_up=args.catch_up,
+                debug=args.debug,
             )
         except KeyboardInterrupt:
             reporter.log("감시를 멈췄습니다.", "warn")

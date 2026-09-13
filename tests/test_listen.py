@@ -9,9 +9,12 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from telethon.tl.types import User  # noqa: E402
 
 from tgdl.links import parse_link  # noqa: E402
 from tgdl.listen import (  # noqa: E402
@@ -31,16 +34,45 @@ class FakeMessage:
         self.media = media
 
 
+class FakeEvent:
+    """텔레그램 알림 흉내."""
+
+    def __init__(self, chat_id, message):
+        self.chat_id = chat_id
+        self.message = message
+
+
 class FakeClient:
-    def __init__(self, fail_send_file: str = ""):
+    def __init__(self, fail_send_file: str = "", entity=None, history=None):
         self.sent: list = []
         self.edits: list = []
         self.files: list = []
         self.fail_send_file = fail_send_file
+        self.entity = entity if entity is not None else User(id=555)
+        self.history: list = list(history or [])
+        self.handlers: list = []
+        self.get_messages_calls: list = []
         self._next_id = 100
 
     async def get_entity(self, chat):
-        return f"entity:{chat}"
+        return self.entity
+
+    def on(self, builder):
+        def register(func):
+            self.handlers.append(func)
+            return func
+
+        return register
+
+    async def get_messages(self, entity, limit=None, min_id=0, **kwargs):
+        self.get_messages_calls.append({"limit": limit, "min_id": min_id})
+        found = [msg for msg in self.history if msg.id > (min_id or 0)]
+        found.sort(key=lambda msg: msg.id, reverse=True)
+        return found[: limit or len(found)]
+
+    async def dispatch(self, chat_id, message):
+        for handler in self.handlers:
+            await handler(FakeEvent(chat_id, message))
 
     async def send_message(self, entity, text, reply_to=None):
         self._next_id += 1
@@ -85,6 +117,20 @@ class FakeDownloader:
         path.write_bytes(b"x" * self.size)
         self.reporter.progress("k", path.name, self.size // 2, self.size)
         self.reporter.finished("k", path.name, path)
+
+
+def processed_links(created) -> int:
+    """워커가 실제로 처리한 링크 수. 큐는 워커가 바로 비우므로 결과로 센다."""
+    return sum(len(downloader.processed) for downloader in created)
+
+
+async def wait_processed(created, expected: int, timeout: float = 2.0) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if processed_links(created) >= expected:
+            break
+        await asyncio.sleep(0.02)
+    return processed_links(created)
 
 
 def build(folder, client=None, fail="", send_back=True):
@@ -217,6 +263,114 @@ def test_worker_processes_queue_in_order():
             await service.queue.join()
             service._worker.cancel()
             assert len(client.files) == 2, "두 요청 모두 처리해야 한다"
+
+    asyncio.run(scenario())
+
+
+# ------------------------------------------------------- 알림 / 직접 확인
+def test_start_ignores_other_chats_and_accepts_own():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            service.entity = None  # start() 가 직접 정하도록
+            service.poll_interval = 0  # 이 테스트에서는 직접 확인 끔
+            await service.start()
+            assert service.chat_id == 555
+            assert client.handlers, "알림 처리기가 등록돼야 한다"
+
+            # 다른 대화방의 메시지는 무시
+            await client.dispatch(999, FakeMessage(1, "https://t.me/c/1/2"))
+            assert await wait_processed(created, 1, timeout=0.2) == 0
+
+            # 내 대화방의 메시지는 처리
+            await client.dispatch(555, FakeMessage(2, "https://t.me/c/1/3"))
+            assert await wait_processed(created, 1) == 1
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_polling_finds_message_when_no_notification():
+    """알림이 오지 않아도 대화방을 직접 확인해 찾아야 한다."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            service.entity = None
+            service.poll_interval = 0.05
+            await service.start()  # 시작 시점에는 대화방이 비어 있음
+
+            # 알림 없이 메시지가 생긴 상황
+            client.history.append(FakeMessage(7, "https://t.me/c/1/5"))
+            assert await wait_processed(created, 1) == 1, "직접 확인으로 찾아야 한다"
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_notification_and_polling_do_not_double_process():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            service.entity = None
+            service.poll_interval = 0.05
+            await service.start()
+
+            message = FakeMessage(11, "https://t.me/c/1/9")
+            client.history.append(message)
+            await client.dispatch(555, message)  # 알림으로 먼저 처리
+            assert await wait_processed(created, 1) == 1
+
+            for _ in range(6):  # 직접 확인이 여러 번 돌아도
+                await asyncio.sleep(0.03)
+            assert processed_links(created) == 1, "같은 메시지를 두 번 처리하면 안 된다"
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_catch_up_processes_recent_links():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            history = [
+                FakeMessage(3, "수다"),
+                FakeMessage(4, "https://t.me/c/1/40"),
+                FakeMessage(5, "https://t.me/c/1/41"),
+            ]
+            service, client, created = build(tmp)
+            client.history = history
+            service.entity = None
+            service.poll_interval = 0
+            service.catch_up = 10
+            await service.start()
+            assert await wait_processed(created, 2) == 2, "지난 메시지의 링크를 찾아야 한다"
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_old_history_is_not_touched_without_catch_up():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            client.history = [FakeMessage(4, "https://t.me/c/1/40")]
+            service.entity = None
+            service.poll_interval = 0.05
+            await service.start()
+            assert await wait_processed(created, 1, timeout=0.25) == 0, "옛 메시지는 건드리지 않는다"
+            assert service._last_id == 4
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_seen_memory_is_bounded():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, _, _ = build(tmp)
+            for index in range(3000):
+                service._mark_seen(index)
+            assert len(service._seen_ids) <= 2000, "기억이 무한히 늘어나면 안 된다"
+            assert service._mark_seen(2999) is False, "최근 것은 기억한다"
 
     asyncio.run(scenario())
 

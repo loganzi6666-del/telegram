@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
@@ -21,6 +22,12 @@ from .reporter import Reporter, human_size
 
 #: 상태 메시지를 고쳐 쓰는 최소 간격(초). 너무 자주 고치면 텔레그램이 제한한다.
 STATUS_EDIT_INTERVAL = 6.0
+
+#: 알림(update)이 오지 않는 경우를 대비해 대화방을 직접 확인하는 간격(초)
+POLL_INTERVAL = 15.0
+
+#: 같은 메시지를 두 번 처리하지 않도록 기억해 두는 개수
+SEEN_LIMIT = 2000
 
 HELP_TEXT = (
     "🎬 텔레그램 동영상 다운로더\n\n"
@@ -102,6 +109,9 @@ class ListenService:
         chat: str = "me",
         send_back: bool = True,
         edit_interval: float = STATUS_EDIT_INTERVAL,
+        poll_interval: float = POLL_INTERVAL,
+        catch_up: int = 0,
+        debug: bool = False,
     ) -> None:
         self.client = client
         self.console = console
@@ -109,32 +119,137 @@ class ListenService:
         self.chat = chat
         self.send_back = send_back
         self.edit_interval = max(3.0, float(edit_interval))
+        #: 알림이 오지 않을 때를 대비한 직접 확인 간격(0 이면 확인하지 않음)
+        self.poll_interval = max(0.0, float(poll_interval))
+        #: 시작할 때 거슬러 올라가 확인할 메시지 수
+        self.catch_up = max(0, int(catch_up))
+        self.debug = bool(debug)
         self.entity = None
+        self.chat_id: Optional[int] = None
         self.queue: asyncio.Queue = asyncio.Queue()
+        self._last_id = 0
+        self._seen_ids: set = set()
+        self._seen_order: deque = deque()
+        self._poller: Optional[asyncio.Task] = None
         self._worker: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------ 시작
     async def start(self) -> None:
-        from telethon import events
+        from telethon import events, utils
 
         self.entity = await self.client.get_entity(self.chat)
-        self._worker = asyncio.create_task(self._run_worker())
+        try:
+            self.chat_id = utils.get_peer_id(self.entity)
+        except Exception:  # noqa: BLE001 - 못 구해도 알림은 모두 확인한다
+            self.chat_id = None
 
-        @self.client.on(events.NewMessage(chats=self.entity))
-        async def _on_message(event):  # pragma: no cover - 실제 텔레그램 연결에서만
-            await self.handle_message(event.message)
+        # 시작 시점의 마지막 메시지를 기억해, 옛 메시지를 다시 받지 않는다.
+        recent = await self._recent_messages(max(1, self.catch_up))
+        self._last_id = max((msg.id for msg in recent), default=0)
+        if self.debug:
+            self.console.log(
+                f"[진단] 대화방 번호 {self.chat_id} · 마지막 메시지 {self._last_id}"
+            )
+
+        if self.catch_up and recent:
+            self.console.log(f"최근 메시지 {len(recent)}개에서 링크를 찾습니다…")
+            for message in sorted(recent, key=lambda msg: msg.id):
+                await self.handle_message(message, source="지난 메시지")
+
+        self._worker = asyncio.create_task(self._run_worker())
+        if self.poll_interval:
+            self._poller = asyncio.create_task(self._poll_loop())
+
+        # 대화방 확인을 직접 한다. 텔레그램 라이브러리의 대화방 필터 해석에
+        # 의존하지 않으므로, 그쪽이 어긋나도 놓치지 않는다.
+        @self.client.on(events.NewMessage())
+        async def _on_message(event):  # pragma: no cover - 실제 연결에서만
+            try:
+                if self.chat_id is not None and event.chat_id != self.chat_id:
+                    return
+                await self.handle_message(event.message, source="알림")
+            except Exception as exc:  # noqa: BLE001
+                self.console.log(f"메시지 처리 중 오류: {exc}", "error")
 
         self._handler = _on_message
 
-    async def handle_message(self, message) -> bool:
+    async def stop(self) -> None:
+        for task in (self._poller, self._worker):
+            if task is not None:
+                task.cancel()
+        tasks = [task for task in (self._poller, self._worker) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ------------------------------------------------------ 대화방 직접 확인
+    async def _recent_messages(self, limit: int) -> List:
+        try:
+            messages = await self.client.get_messages(self.entity, limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            self.console.log(f"대화방을 읽을 수 없습니다: {exc}", "warn")
+            return []
+        return [msg for msg in (messages or []) if msg]
+
+    async def _poll_loop(self) -> None:
+        """알림이 오지 않아도 동작하도록 대화방을 주기적으로 직접 확인한다."""
+        while True:
+            try:
+                await asyncio.sleep(self.poll_interval)
+                try:
+                    messages = await self.client.get_messages(
+                        self.entity, limit=30, min_id=self._last_id
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.console.log(f"대화방 확인 실패(무시): {exc}", "warn")
+                    continue
+                messages = [msg for msg in (messages or []) if msg]
+                if self.debug:
+                    self.console.log(
+                        f"[진단] 직접 확인: 새 메시지 {len(messages)}개"
+                        f" (마지막 {self._last_id})"
+                    )
+                for message in sorted(messages, key=lambda msg: msg.id):
+                    await self.handle_message(message, source="직접 확인")
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001 - 확인 실패로 멈추지 않는다
+                self.console.log(f"대화방 확인 중 오류(무시): {exc}", "warn")
+
+    # ------------------------------------------------------------------ 판별
+    def _mark_seen(self, message_id) -> bool:
+        """처음 본 메시지면 True. 알림과 직접 확인이 겹쳐도 한 번만 처리한다."""
+        if message_id is None:
+            return True
+        if message_id in self._seen_ids:
+            return False
+        self._seen_ids.add(message_id)
+        self._seen_order.append(message_id)
+        while len(self._seen_order) > SEEN_LIMIT:
+            self._seen_ids.discard(self._seen_order.popleft())
+        return True
+
+    async def handle_message(self, message, source: str = "") -> bool:
         """새 메시지를 확인해 처리할 것이면 대기열에 넣는다."""
+        message_id = getattr(message, "id", None)
+        if not self._mark_seen(message_id):
+            return False
+        if message_id is not None:
+            self._last_id = max(self._last_id, message_id)
+
         text = getattr(message, "message", None) or getattr(message, "raw_text", None)
+        if self.debug:
+            preview = (text or "").replace("\n", " ")[:60]
+            self.console.log(f"[진단] {source} 메시지 {message_id}: {preview!r}")
+
         links = links_from_message(text, bool(getattr(message, "media", None)))
         if not links:
             if is_command(text):
-                await self._send(HELP_TEXT, reply_to=getattr(message, "id", None))
+                await self._send(HELP_TEXT, reply_to=message_id)
             return False
-        await self.queue.put((links, getattr(message, "id", None)))
+
+        if source == "직접 확인":
+            self.console.log("알림이 늦어 직접 확인해서 찾았습니다.", "warn")
+        await self.queue.put((links, message_id))
         return True
 
     # ------------------------------------------------------------------ 처리
@@ -275,20 +390,46 @@ async def run_listen(
     chat: str = "me",
     send_back: bool = True,
     hello: bool = True,
+    poll_interval: float = POLL_INTERVAL,
+    catch_up: int = 0,
+    debug: bool = False,
 ) -> None:
     """감시를 시작하고 연결이 끊어질 때까지 기다린다."""
     service = ListenService(
-        client, console, make_downloader, chat=chat, send_back=send_back
+        client,
+        console,
+        make_downloader,
+        chat=chat,
+        send_back=send_back,
+        poll_interval=poll_interval,
+        catch_up=catch_up,
+        debug=debug,
     )
     await service.start()
 
     where = "저장한 메시지" if chat == "me" else str(chat)
     console.log(f"텔레그램 감시를 시작했습니다: {where}", "ok")
     console.log("휴대폰에서 그 대화방에 링크를 붙여넣으면 자동으로 받습니다.")
+    if service.poll_interval:
+        console.log(
+            f"알림이 오지 않아도 {service.poll_interval:.0f}초마다 대화방을 직접 확인합니다."
+        )
     console.log("이 창을 닫거나 Ctrl+C 를 누르면 멈춥니다.")
+
     if hello:
-        await service._send(
+        sent = await service._send(
             "✅ 다운로더가 켜졌습니다.\n여기에 텔레그램 동영상 링크를 붙여넣으세요."
         )
+        if sent is None:
+            console.log(
+                "시작 알림을 보내지 못했습니다. 대화방을 잘못 지정했을 수 있습니다.", "warn"
+            )
+        else:
+            console.log(
+                f"'{where}' 로 시작 알림을 보냈습니다. 휴대폰에서 확인해 보세요.", "ok"
+            )
 
-    await client.run_until_disconnected()
+    try:
+        await client.run_until_disconnected()
+    finally:
+        await service.stop()
