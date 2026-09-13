@@ -12,12 +12,14 @@ import sys
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-BRANCH = "claude/elegant-fermat-eyudcb"
+#: 기본 가지 이름(갱신 안내에 사용)
+BRANCH = "main"
+REPO_URL = "https://github.com/loganzi6666-del/telegram.git"
 CLONE_HINT = (
     "이 폴더는 git 으로 받은 것이 아니어서 자동 갱신할 수 없습니다.\n"
     "한 번만 아래처럼 git 으로 다시 받아두면, 다음부터는\n"
     "`python -m tgdl update` 한 줄로 갱신됩니다.\n\n"
-    f"  git clone -b {BRANCH} https://github.com/loganzi6666-del/telegram.git\n"
+    f"  git clone {REPO_URL}\n"
     "  cd telegram\n"
     "  python -m pip install -r requirements.txt"
 )
@@ -76,8 +78,8 @@ def run_update(
     out(f"폴더: {root}")
 
     code, branch = _run(runner, [git, "rev-parse", "--abbrev-ref", "HEAD"], root)
-    if code == 0 and branch:
-        out(f"가지(branch): {branch}")
+    branch = branch if code == 0 and branch else BRANCH
+    out(f"가지(branch): {branch}")
 
     code, before = _run(runner, [git, "rev-parse", "--short", "HEAD"], root)
     before = before if code == 0 else ""
@@ -89,7 +91,7 @@ def run_update(
         out(f"  {output}")
         out(
             "\n내가 고친 내용이 남아 있어 충돌할 수 있습니다. 그대로 버려도 괜찮다면:\n"
-            f"  git reset --hard origin/{BRANCH}\n"
+            f"  git reset --hard origin/{branch}\n"
             "  git pull"
         )
         return 1

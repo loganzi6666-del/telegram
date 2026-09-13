@@ -82,7 +82,7 @@ def test_zip_folder_explains_how_to_clone():
             selfupdate.repo_root = original
     assert code == 2
     assert "git clone" in out.text
-    assert selfupdate.BRANCH in out.text
+    assert "-b " not in out.text, "기본 가지라면 -b 옵션이 필요 없다"
 
 
 def test_missing_git_is_reported():
@@ -131,7 +131,8 @@ def test_pull_conflict_gives_recovery_command():
     )
     assert code == 1
     assert "갱신하지 못했습니다" in out.text
-    assert "git reset --hard" in out.text, "막혔을 때 빠져나갈 방법을 알려줘야 한다"
+    # 되돌리기 안내는 지금 있는 가지를 가리켜야 한다
+    assert "git reset --hard origin/claude/elegant-fermat-eyudcb" in out.text
 
 
 def test_dependency_install_failure_is_not_fatal():

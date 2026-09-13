@@ -21,7 +21,7 @@
 파이썬 3.9 이상이 필요합니다.
 
 ```bash
-git clone -b claude/elegant-fermat-eyudcb https://github.com/loganzi6666-del/telegram.git
+git clone https://github.com/loganzi6666-del/telegram.git
 cd telegram
 python -m pip install -r requirements.txt          # 필수 (telethon)
 python -m pip install -r requirements-extra.txt    # 선택: 속도 향상 + 클립보드 (컴퓨터에서만)
@@ -181,7 +181,7 @@ python -m tgdl serve --port 8080      # 포트 번호 바꾸기
 termux-setup-storage          # 저장 권한 허용 (팝업에서 '허용')
 pkg update -y && pkg install -y python git
 pip install telethon
-git clone -b claude/elegant-fermat-eyudcb https://github.com/loganzi6666-del/telegram.git
+git clone https://github.com/loganzi6666-del/telegram.git
 cd telegram
 python -m tgdl config         # api_id / api_hash 입력
 python -m tgdl login          # 전화번호 + 인증코드
@@ -203,7 +203,7 @@ python -m tgdl                # 링크 붙여넣기 (길게 눌러 '붙여넣기
 ```bash
 pip install telethon
 lg2 clone https://github.com/loganzi6666-del/telegram.git    # a-Shell 의 git
-cd telegram && git checkout claude/elegant-fermat-eyudcb
+cd telegram
 python -m tgdl config
 python -m tgdl login
 python -m tgdl
