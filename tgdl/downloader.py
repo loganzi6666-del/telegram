@@ -301,6 +301,9 @@ class Downloader:
     def _wanted(self, msg) -> bool:
         if msg is None or not getattr(msg, "media", None):
             return False
+        # 링크 미리보기는 받을 파일이 아니다.
+        if type(msg.media).__name__ in {"MessageMediaWebPage", "MessageMediaEmpty"}:
+            return False
         file = getattr(msg, "file", None)
         if file is None or not getattr(file, "size", None):
             return False

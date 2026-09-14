@@ -44,15 +44,43 @@ HELP_TEXT = (
 )
 
 
-def links_from_message(text: Optional[str], has_media: bool) -> List[ParsedLink]:
-    """이 메시지를 처리해야 하는지 판단한다.
+#: 링크를 붙여넣으면 텔레그램이 자동으로 붙이는 '링크 미리보기'.
+#: 파일이 아니므로 무한 반복 방지 대상에서 제외해야 한다.
+_PREVIEW_NAMES = {"MessageMediaWebPage", "MessageMediaEmpty"}
 
-    사진·동영상이 붙은 메시지는 무시한다. 우리가 되돌려 보낸 파일에 반응해
-    무한 반복하는 것을 막기 위한 안전장치다.
+try:  # 실제 타입으로 확인하고, 못 구하면 이름으로 확인한다.
+    from telethon.tl.types import MessageMediaEmpty, MessageMediaWebPage
+
+    _PREVIEW_TYPES: tuple = (MessageMediaWebPage, MessageMediaEmpty)
+except Exception:  # pragma: no cover - telethon 이 없는 환경
+    _PREVIEW_TYPES = ()
+
+
+def has_attachment(message) -> bool:
+    """파일(동영상·사진·문서)이 붙은 메시지인지.
+
+    우리가 되돌려 보낸 파일에 스스로 반응해 무한 반복하는 것을 막으려면 파일이
+    붙은 메시지를 무시해야 한다. 다만 **링크 미리보기는 파일이 아니다** —
+    링크를 붙여넣으면 텔레그램이 미리보기를 자동으로 붙이므로, 이것을 파일로
+    오해하면 정작 받아야 할 링크를 모두 버리게 된다.
     """
-    if has_media:
+    media = getattr(message, "media", None)
+    if not media:
+        return False
+    if _PREVIEW_TYPES and isinstance(media, _PREVIEW_TYPES):
+        return False
+    return type(media).__name__ not in _PREVIEW_NAMES
+
+
+def message_text(message) -> str:
+    return getattr(message, "message", None) or getattr(message, "raw_text", None) or ""
+
+
+def links_from_message(message) -> List[ParsedLink]:
+    """이 메시지에서 처리할 링크를 찾는다. 파일이 붙은 메시지는 건너뛴다."""
+    if has_attachment(message):
         return []
-    return extract_links(text or "")
+    return extract_links(message_text(message))
 
 
 def _is_too_big(exc: Exception) -> bool:
@@ -91,7 +119,7 @@ class RelayReporter(Reporter):
         self.console.progress(key, label, done, total)
         percent = (done / total * 100) if total else 0
         self.state.line = (
-            f"⬇️ 받는 중 {percent:.0f}%\n"
+            f"⬇️ 컴퓨터로 다운받는 중 {percent:.0f}%\n"
             f"{label}\n{human_size(done)} / {human_size(total)}"
         )
 
@@ -247,12 +275,13 @@ class ListenService:
         if message_id is not None:
             self._last_id = max(self._last_id, message_id)
 
-        text = getattr(message, "message", None) or getattr(message, "raw_text", None)
+        text = message_text(message)
         if self.debug:
-            preview = (text or "").replace("\n", " ")[:60]
-            self.console.log(f"[진단] {source} 메시지 {message_id}: {preview!r}")
+            preview = text.replace("\n", " ")[:60]
+            kind = "파일" if has_attachment(message) else "글"
+            self.console.log(f"[진단] {source} {kind}메시지 {message_id}: {preview!r}")
 
-        links = links_from_message(text, bool(getattr(message, "media", None)))
+        links = links_from_message(message)
         if not links:
             if is_command(text):
                 await self._send(HELP_TEXT, reply_to=message_id)
@@ -342,14 +371,14 @@ class ListenService:
     # ------------------------------------------------------------------ 전송
     async def _upload(self, status, state: RequestState, path: Path, reply_to=None) -> None:
         size = self._size(path)
-        state.line = f"⬆️ 휴대폰으로 보내는 중 0%\n{path.name}\n{human_size(size)}"
+        state.line = f"⬆️ 폰으로 전송 중 0%\n{path.name}\n{human_size(size)}"
         sent = {"value": 0}
 
         def on_progress(current, total):  # Telethon 이 동기로 호출한다
             sent["value"] = current
             percent = (current / total * 100) if total else 0
             state.line = (
-                f"⬆️ 휴대폰으로 보내는 중 {percent:.0f}%\n"
+                f"⬆️ 폰으로 전송 중 {percent:.0f}%\n"
                 f"{path.name}\n{human_size(current)} / {human_size(total or size)}"
             )
 

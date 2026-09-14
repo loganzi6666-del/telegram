@@ -14,12 +14,20 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from telethon.tl.types import User  # noqa: E402
+from telethon.tl.types import (  # noqa: E402
+    MessageMediaDocument,
+    MessageMediaWebPage,
+    User,
+    WebPageEmpty,
+)
 
 from tgdl.links import parse_link  # noqa: E402
 from tgdl.listen import (  # noqa: E402
     HELP_TEXT,
     ListenService,
+    RelayReporter,
+    RequestState,
+    has_attachment,
     is_command,
     links_from_message,
 )
@@ -32,6 +40,11 @@ class FakeMessage:
         self.message = text
         self.raw_text = text
         self.media = media
+
+
+def link_preview():
+    """링크를 붙여넣으면 텔레그램이 자동으로 붙이는 미리보기."""
+    return MessageMediaWebPage(webpage=WebPageEmpty(id=0))
 
 
 class FakeEvent:
@@ -162,11 +175,24 @@ def build(folder, client=None, fail="", send_back=True):
 
 # ------------------------------------------------------------------ 순수 함수
 def test_links_from_message():
-    assert len(links_from_message("https://t.me/c/1/2", False)) == 1
-    assert links_from_message("그냥 수다", False) == []
+    assert len(links_from_message(FakeMessage(1, "https://t.me/c/1/2"))) == 1
+    assert links_from_message(FakeMessage(2, "그냥 수다")) == []
+    assert links_from_message(FakeMessage(3, "")) == []
     # 우리가 되돌려 보낸 파일에 반응하면 무한 반복이 된다.
-    assert links_from_message("https://t.me/c/1/2", True) == []
-    assert links_from_message(None, False) == []
+    assert links_from_message(
+        FakeMessage(4, "https://t.me/c/1/2", media=MessageMediaDocument())
+    ) == []
+
+
+def test_link_preview_is_not_treated_as_a_file():
+    """링크를 붙여넣으면 미리보기가 붙는다. 이것을 파일로 오해하면 모든 링크를 놓친다."""
+    preview_message = FakeMessage(9, "https://t.me/sexymv0001/935", media=link_preview())
+    assert has_attachment(preview_message) is False
+    assert len(links_from_message(preview_message)) == 1
+
+    file_message = FakeMessage(10, "설명", media=MessageMediaDocument())
+    assert has_attachment(file_message) is True
+    assert links_from_message(file_message) == []
 
 
 def test_is_command():
@@ -433,6 +459,53 @@ def test_upload_falls_back_to_no_reply():
             assert len(client.files) == 1, "답장 없이 다시 보내 성공해야 한다"
             assert client.files[0][3] is None, "재시도는 답장 없이"
             assert not state.errors, f"실패로 기록되면 안 된다: {state.errors}"
+
+    asyncio.run(scenario())
+
+
+def test_pasted_link_with_preview_is_processed_end_to_end():
+    """실제 상황: 미리보기가 붙은 링크 → 컴퓨터에 다운로드 → 폰으로 전송."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            service.entity = None
+            service.poll_interval = 0
+            await service.start()
+
+            pasted = FakeMessage(30, "https://t.me/sexymv0001/935", media=link_preview())
+            await client.dispatch(555, pasted)
+
+            assert await wait_processed(created, 1) == 1, "미리보기가 붙어도 처리해야 한다"
+            assert len(client.files) == 1, "폰으로 전송까지 되어야 한다"
+            await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_status_wording_tells_what_is_happening():
+    """텔레그램 상태 메시지 문구: 컴퓨터로 다운받는 중 → 폰으로 전송 중 → 완료."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, _ = build(tmp)
+            state = RequestState()
+
+            # 1) 다운로드 중 문구
+            reporter = RelayReporter(Reporter(), state)
+            reporter.progress("k", "영상.mp4", 300 * 1024 * 1024, 724 * 1024 * 1024)
+            assert "컴퓨터로 다운받는 중" in state.line
+            assert "41%" in state.line and "724.0MB" in state.line
+
+            # 2) 전송 중 문구
+            path = Path(tmp) / "영상.mp4"
+            path.write_bytes(b"x" * 2048)
+            await service._upload(None, state, path)
+            assert "폰으로 전송 중" in state.line
+            assert len(client.files) == 1
+
+            # 3) 마무리 문구
+            state.paths.append(path)
+            summary = service._summary(state)
+            assert "완료" in summary and "영상.mp4" in summary
 
     asyncio.run(scenario())
 
