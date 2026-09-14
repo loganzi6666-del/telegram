@@ -60,7 +60,9 @@ class Reporter:
     def progress(self, key: str, label: str, done: int, total: int) -> None:
         pass
 
-    def finished(self, key: str, label: str, path, skipped: bool = False) -> None:
+    def finished(
+        self, key: str, label: str, path, skipped: bool = False, info=None
+    ) -> None:
         pass
 
     def failed(self, key: str, label: str, error: str) -> None:
@@ -181,7 +183,9 @@ class ConsoleReporter(Reporter):
             flush=True,
         )
 
-    def finished(self, key: str, label: str, path, skipped: bool = False) -> None:
+    def finished(
+        self, key: str, label: str, path, skipped: bool = False, info=None
+    ) -> None:
         self._active.pop(key, None)
         self._state.pop(key, None)
         self._clear()

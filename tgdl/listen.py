@@ -83,6 +83,33 @@ def links_from_message(message) -> List[ParsedLink]:
     return extract_links(message_text(message))
 
 
+try:  # 영상 속성(가로·세로·재생시간)
+    from telethon.tl.types import DocumentAttributeVideo
+except Exception:  # pragma: no cover - telethon 이 없는 환경
+    DocumentAttributeVideo = None
+
+
+def video_attributes(info) -> Optional[list]:
+    """원본 해상도를 담은 영상 속성. 알 수 없으면 None.
+
+    이것을 넘기지 않으면 텔레그램이 가로·세로를 0으로 보고 임의의 비율로
+    맞추기 때문에 받는 쪽에서 좌우가 잘린 것처럼 보인다.
+    """
+    if info is None or DocumentAttributeVideo is None:
+        return None
+    if not getattr(info, "is_video", False) or not getattr(info, "has_size", False):
+        return None
+    return [
+        DocumentAttributeVideo(
+            duration=int(getattr(info, "duration", 0) or 0),
+            w=int(info.width),
+            h=int(info.height),
+            supports_streaming=True,
+            round_message=bool(getattr(info, "round_message", False)),
+        )
+    ]
+
+
 def _is_too_big(exc: Exception) -> bool:
     message = str(exc).lower()
     return "too big" in message or "file size" in message or "file_too_large" in message
@@ -101,6 +128,8 @@ class RequestState:
         self.paths: List[Path] = []
         self.errors: List[str] = []
         self.skipped: List[Path] = []
+        #: 파일별 원본 영상 정보(가로·세로·재생시간). 되돌려 보낼 때 쓴다.
+        self.info: dict = {}
 
 
 class RelayReporter(Reporter):
@@ -123,12 +152,17 @@ class RelayReporter(Reporter):
             f"{label}\n{human_size(done)} / {human_size(total)}"
         )
 
-    def finished(self, key: str, label: str, path, skipped: bool = False) -> None:
-        self.console.finished(key, label, path, skipped)
+    def finished(
+        self, key: str, label: str, path, skipped: bool = False, info=None
+    ) -> None:
+        self.console.finished(key, label, path, skipped, info)
+        target = Path(path)
+        if info is not None:
+            self.state.info[target] = info
         if skipped:
-            self.state.skipped.append(Path(path))
+            self.state.skipped.append(target)
         else:
-            self.state.paths.append(Path(path))
+            self.state.paths.append(target)
 
     def failed(self, key: str, label: str, error: str) -> None:
         self.console.failed(key, label, error)
@@ -382,12 +416,23 @@ class ListenService:
                 f"{path.name}\n{human_size(current)} / {human_size(total or size)}"
             )
 
+        # 원본 해상도·재생시간을 함께 보내야 좌우가 잘리지 않는다.
+        info = state.info.get(path)
+        attributes = video_attributes(info)
+        as_document = bool(info and info.is_video and not attributes)
+        if as_document:
+            self.console.log(
+                "원본 화면비를 알 수 없어 파일 형태로 보냅니다(잘림 방지).", "warn"
+            )
+
         async def send(with_reply) -> None:
             await self.client.send_file(
                 self.entity,
                 str(path),
                 caption=path.name[:1000],  # 링크를 넣지 않는다(무한 반복 방지)
-                supports_streaming=True,
+                attributes=attributes,
+                supports_streaming=not as_document,
+                force_document=as_document,
                 progress_callback=on_progress,
                 reply_to=with_reply,
             )
@@ -399,7 +444,8 @@ class ListenService:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                if reply_to is None or _is_too_big(exc):
+                # 이미 올린 용량이 있으면 다시 올리지 않는다(대용량 재전송 방지).
+                if reply_to is None or _is_too_big(exc) or sent["value"]:
                     raise
                 # 답장으로 보내는 것이 문제일 수 있으니 답장 없이 한 번 더.
                 self.console.log(

@@ -41,7 +41,9 @@ class GuiReporter(Reporter):
         self._last[key] = now
         self.ui.put(("progress", key, label, done, total))
 
-    def finished(self, key: str, label: str, path, skipped: bool = False) -> None:
+    def finished(
+        self, key: str, label: str, path, skipped: bool = False, info=None
+    ) -> None:
         self._last.pop(key, None)
         self.ui.put(("finished", key, label, str(path), skipped))
 

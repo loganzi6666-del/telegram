@@ -14,17 +14,27 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tgdl.downloader import CHUNK_SIZE, Downloader, LinkPump, sanitize  # noqa: E402
+from tgdl.downloader import (  # noqa: E402
+    CHUNK_SIZE,
+    Downloader,
+    LinkPump,
+    media_info_from_message,
+    sanitize,
+)
 from tgdl.links import parse_link  # noqa: E402
 from tgdl.reporter import Reporter  # noqa: E402
 
 
 class FakeFile:
-    def __init__(self, name, size, mime="video/mp4", ext=".mp4"):
+    def __init__(self, name, size, mime="video/mp4", ext=".mp4",
+                 width=0, height=0, duration=0):
         self.name = name
         self.size = size
         self.mime_type = mime
         self.ext = ext
+        self.width = width
+        self.height = height
+        self.duration = duration
 
 
 class FakeMessage:
@@ -76,8 +86,9 @@ class CollectingReporter(Reporter):
     def log(self, message, level="info"):
         self.logs.append((level, message))
 
-    def finished(self, key, label, path, skipped=False):
+    def finished(self, key, label, path, skipped=False, info=None):
         self.done.append((label, str(path), skipped))
+        self.info = info
 
     def failed(self, key, label, error):
         self.errors.append((label, error))
@@ -272,6 +283,35 @@ def test_falls_back_to_single_connection_when_parallel_unavailable():
         assert client.offsets == [0]
         assert any("기본 방식" in message for _, message in reporter.logs)
         assert downloader.connections == 1, "한 번 전환하면 이후에도 기본 방식을 쓴다"
+
+
+def test_original_video_size_is_kept():
+    """폰으로 되돌려 보낼 때 좌우가 잘리지 않도록 원본 해상도를 읽어둬야 한다."""
+    msg = FakeMessage(5, 1000)
+    msg.file = FakeFile("clip.mp4", 1000, width=1080, height=1920, duration=754.2)
+    info = media_info_from_message(msg)
+    assert (info.width, info.height) == (1080, 1920)
+    assert info.duration == 754
+    assert info.is_video is True and info.has_size is True
+
+    photo = FakeMessage(6, 1000, mime="image/jpeg")
+    photo.video = False
+    photo.file = FakeFile("a.jpg", 1000, mime="image/jpeg", width=800, height=600)
+    assert media_info_from_message(photo).is_video is False
+
+
+def test_finished_report_carries_original_size():
+    payload = os.urandom(2048)
+    with tempfile.TemporaryDirectory() as tmp:
+        reporter = CollectingReporter()
+        downloader = make_downloader(tmp, FakeClient(payload), reporter)
+        msg = FakeMessage(8, len(payload))
+        msg.file = FakeFile("clip.mp4", len(payload), width=1920, height=1080, duration=30)
+
+        asyncio.run(downloader._download(msg, FakeEntity()))
+
+        assert reporter.info is not None, "원본 정보가 함께 전달돼야 한다"
+        assert (reporter.info.width, reporter.info.height) == (1920, 1080)
 
 
 def main() -> int:

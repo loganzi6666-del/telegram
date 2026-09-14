@@ -12,6 +12,7 @@ import errno
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -46,6 +47,49 @@ ALBUM_SPAN = 10
 
 class DownloadError(RuntimeError):
     """사용자에게 그대로 보여줄 수 있는 오류."""
+
+
+@dataclass
+class MediaInfo:
+    """원본 메시지에서 읽어둔 파일 정보.
+
+    이 파일을 다시 텔레그램으로 보낼 때(휴대폰 전송) 원본 그대로 보이려면
+    가로·세로·재생시간을 함께 알려줘야 한다. 알려주지 않으면 텔레그램이
+    크기를 0으로 보고 임의의 비율로 맞춰 **좌우가 잘린 것처럼** 보인다.
+    """
+
+    width: int = 0
+    height: int = 0
+    duration: int = 0
+    mime_type: str = ""
+    is_video: bool = False
+    round_message: bool = False
+
+    @property
+    def has_size(self) -> bool:
+        return bool(self.width and self.height)
+
+
+def media_info_from_message(msg) -> MediaInfo:
+    """메시지에서 원본 영상 정보를 읽어온다."""
+    info = MediaInfo()
+    file = getattr(msg, "file", None)
+    if file is not None:
+        info.mime_type = getattr(file, "mime_type", "") or ""
+        try:
+            info.width = int(getattr(file, "width", 0) or 0)
+            info.height = int(getattr(file, "height", 0) or 0)
+            info.duration = int(float(getattr(file, "duration", 0) or 0))
+        except (TypeError, ValueError):
+            pass
+    info.round_message = bool(getattr(msg, "video_note", None))
+    info.is_video = bool(
+        getattr(msg, "video", None)
+        or getattr(msg, "gif", None)
+        or info.round_message
+        or info.mime_type.startswith("video/")
+    )
+    return info
 
 
 def sanitize(name: str, max_len: int = 120) -> str:
@@ -478,7 +522,9 @@ class Downloader:
                     self.reporter.log(f"저장 후 처리 실패(무시): {exc}", "warn")
             self.stats.downloaded += 1
             self.stats.bytes += total or dest.stat().st_size
-            self.reporter.finished(key, label, dest)
+            self.reporter.finished(
+                key, label, dest, info=media_info_from_message(msg)
+            )
         except asyncio.CancelledError:
             self.reporter.log(f"중단됨(이어받기 가능): {label}", "warn")
             raise

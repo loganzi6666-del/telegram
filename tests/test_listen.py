@@ -21,6 +21,7 @@ from telethon.tl.types import (  # noqa: E402
     WebPageEmpty,
 )
 
+from tgdl.downloader import MediaInfo  # noqa: E402
 from tgdl.links import parse_link  # noqa: E402
 from tgdl.listen import (  # noqa: E402
     HELP_TEXT,
@@ -58,10 +59,12 @@ class FakeEvent:
 class FakeClient:
     def __init__(self, fail_send_file: str = "", entity=None, history=None,
                  hang_send_message: bool = False, fail_reply_send: bool = False,
-                 fail_reply_file: bool = False):
+                 fail_reply_file: bool = False, fail_after_bytes: bool = False):
         self.hang_send_message = hang_send_message
         self.fail_reply_send = fail_reply_send
         self.fail_reply_file = fail_reply_file
+        self.fail_after_bytes = fail_after_bytes
+        self.file_options: list = []
         self.sent: list = []
         self.edits: list = []
         self.files: list = []
@@ -106,16 +109,25 @@ class FakeClient:
 
     async def send_file(
         self, entity, path, caption=None, supports_streaming=None,
-        progress_callback=None, reply_to=None,
+        progress_callback=None, reply_to=None, attributes=None,
+        force_document=False,
     ):
+        size = os.path.getsize(path)
+        if self.fail_after_bytes:
+            if progress_callback:
+                progress_callback(size // 2, size)  # 절반 올린 뒤 실패
+            raise RuntimeError("전송 중 끊김")
         if self.fail_send_file:
             raise RuntimeError(self.fail_send_file)
         if self.fail_reply_file and reply_to is not None:
             raise RuntimeError("답장으로는 파일을 보낼 수 없음")
-        size = os.path.getsize(path)
         if progress_callback:
             progress_callback(size, size)
         self.files.append((path, caption, supports_streaming, reply_to))
+        self.file_options.append(
+            {"attributes": attributes, "force_document": force_document,
+             "supports_streaming": supports_streaming}
+        )
 
     @property
     def last_edit(self) -> str:
@@ -506,6 +518,72 @@ def test_status_wording_tells_what_is_happening():
             state.paths.append(path)
             summary = service._summary(state)
             assert "완료" in summary and "영상.mp4" in summary
+
+    asyncio.run(scenario())
+
+
+# ------------------------------------------------- 원본 그대로 전송하기
+def test_upload_sends_original_resolution():
+    """폰에서 좌우가 잘리지 않도록 원본 가로·세로·재생시간을 함께 보낸다."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, _ = build(tmp)
+            state = RequestState()
+            path = Path(tmp) / "세로영상.mp4"
+            path.write_bytes(b"x" * 4096)
+            state.info[path] = MediaInfo(
+                width=1080, height=1920, duration=754,
+                mime_type="video/mp4", is_video=True,
+            )
+
+            await service._upload(None, state, path)
+
+            options = client.file_options[0]
+            attributes = options["attributes"]
+            assert attributes, "영상 속성을 반드시 보내야 한다"
+            assert (attributes[0].w, attributes[0].h) == (1080, 1920)
+            assert attributes[0].duration == 754
+            assert options["force_document"] is False
+            assert options["supports_streaming"] is True
+            assert not state.errors
+
+    asyncio.run(scenario())
+
+
+def test_upload_without_known_size_sends_as_file():
+    """크기를 모르면 잘린 채로 보이지 않게 파일 형태로 보낸다."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, _ = build(tmp)
+            state = RequestState()
+            path = Path(tmp) / "크기모름.mp4"
+            path.write_bytes(b"x" * 4096)
+            state.info[path] = MediaInfo(mime_type="video/mp4", is_video=True)
+
+            await service._upload(None, state, path)
+
+            options = client.file_options[0]
+            assert options["attributes"] is None
+            assert options["force_document"] is True, "잘림 방지를 위해 파일로 보낸다"
+            assert options["supports_streaming"] is False
+
+    asyncio.run(scenario())
+
+
+def test_upload_does_not_resend_after_partial_upload():
+    """이미 올라간 용량이 있으면 다시 올리지 않는다(대용량 재전송 방지)."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(fail_after_bytes=True)
+            service, client, _ = build(tmp, client=client)
+            state = RequestState()
+            path = Path(tmp) / "큰영상.mp4"
+            path.write_bytes(b"x" * 8192)
+
+            await service._upload(None, state, path, reply_to=7)
+
+            assert client.files == [], "성공한 전송이 없어야 한다"
+            assert len(state.errors) == 1, "한 번만 실패로 기록하고 재전송하지 않는다"
 
     asyncio.run(scenario())
 
