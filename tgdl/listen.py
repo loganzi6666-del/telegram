@@ -29,6 +29,10 @@ POLL_INTERVAL = 15.0
 #: 같은 메시지를 두 번 처리하지 않도록 기억해 두는 개수
 SEEN_LIMIT = 2000
 
+#: 상태 메시지 전송·수정을 기다리는 한계(초).
+#: 상태 표시는 장식이므로, 이게 늦어도 다운로드를 막으면 안 된다.
+STATUS_TIMEOUT = 20.0
+
 HELP_TEXT = (
     "🎬 텔레그램 동영상 다운로더\n\n"
     "받고 싶은 동영상의 링크를 이 대화방에 붙여넣으세요.\n"
@@ -49,6 +53,11 @@ def links_from_message(text: Optional[str], has_media: bool) -> List[ParsedLink]
     if has_media:
         return []
     return extract_links(text or "")
+
+
+def _is_too_big(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "too big" in message or "file size" in message or "file_too_large" in message
 
 
 def is_command(text: Optional[str]) -> bool:
@@ -124,6 +133,8 @@ class ListenService:
         #: 시작할 때 거슬러 올라가 확인할 메시지 수
         self.catch_up = max(0, int(catch_up))
         self.debug = bool(debug)
+        #: 상태 메시지 호출을 기다리는 한계(초)
+        self.status_timeout = STATUS_TIMEOUT
         self.entity = None
         self.chat_id: Optional[int] = None
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -267,9 +278,20 @@ class ListenService:
 
     async def process(self, links: Sequence[ParsedLink], reply_to=None) -> RequestState:
         state = RequestState()
+        # 텔레그램 상태 메시지가 늦거나 막혀도 다운로드는 진행돼야 하므로,
+        # 먼저 화면에 알리고 시작한다.
+        self.console.log(
+            "요청 받음: " + " / ".join(link.describe() for link in links)
+        )
+
         waiting = self.queue.qsize()
         first = state.line + (f"\n(대기 중인 요청 {waiting}건)" if waiting else "")
         status = await self._send(first, reply_to=reply_to)
+        if status is None:
+            self.console.log(
+                "상태 메시지를 보낼 수 없어 화면에만 표시합니다(다운로드는 계속됩니다).",
+                "warn",
+            )
 
         reporter = RelayReporter(self.console, state)
         downloader = self.make_downloader(reporter)
@@ -331,20 +353,36 @@ class ListenService:
                 f"{path.name}\n{human_size(current)} / {human_size(total or size)}"
             )
 
-        ticker = asyncio.create_task(self._ticker(status, state))
-        try:
+        async def send(with_reply) -> None:
             await self.client.send_file(
                 self.entity,
                 str(path),
                 caption=path.name[:1000],  # 링크를 넣지 않는다(무한 반복 방지)
                 supports_streaming=True,
                 progress_callback=on_progress,
-                reply_to=reply_to,
+                reply_to=with_reply,
             )
+
+        ticker = asyncio.create_task(self._ticker(status, state))
+        try:
+            try:
+                await send(reply_to)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                if reply_to is None or _is_too_big(exc):
+                    raise
+                # 답장으로 보내는 것이 문제일 수 있으니 답장 없이 한 번 더.
+                self.console.log(
+                    f"답장으로 보내지 못해 답장 없이 다시 시도합니다: {exc}", "warn"
+                )
+                await send(None)
             self.console.log(f"휴대폰으로 전송 완료: {path.name}", "ok")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001
             message = str(exc) or exc.__class__.__name__
-            if "too big" in message.lower() or "file size" in message.lower():
+            if _is_too_big(exc):
                 message = (
                     "용량이 너무 커서 텔레그램으로 보낼 수 없습니다"
                     f"({human_size(size)}). 파일은 컴퓨터에 저장돼 있습니다."
@@ -367,20 +405,46 @@ class ListenService:
         except asyncio.CancelledError:
             pass
 
-    async def _send(self, text: str, reply_to=None):
+    async def _call(self, make_coro: Callable[[], object], what: str, quiet: bool = False):
+        """상태 메시지용 호출. 늦거나 실패해도 다운로드를 막지 않는다."""
         try:
-            return await self.client.send_message(self.entity, text, reply_to=reply_to)
+            return await asyncio.wait_for(make_coro(), timeout=self.status_timeout)
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            self.console.log(
+                f"{what}이(가) {self.status_timeout:.0f}초 안에 끝나지 않아 건너뜁니다.",
+                "warn",
+            )
         except Exception as exc:  # noqa: BLE001
-            self.console.log(f"텔레그램 메시지를 보낼 수 없습니다: {exc}", "warn")
-            return None
+            if not quiet:
+                self.console.log(f"{what} 실패(무시): {exc}", "warn")
+            elif self.debug:
+                self.console.log(f"[진단] {what} 실패: {exc}")
+        return None
+
+    async def _send(self, text: str, reply_to=None):
+        status = await self._call(
+            lambda: self.client.send_message(self.entity, text, reply_to=reply_to),
+            "상태 메시지 보내기",
+        )
+        if status is None and reply_to is not None:
+            # 답장으로 보내는 것이 문제일 수 있으니 답장 없이 한 번 더 시도한다.
+            status = await self._call(
+                lambda: self.client.send_message(self.entity, text),
+                "상태 메시지 보내기(답장 없이)",
+            )
+        return status
 
     async def _edit(self, status, text: str) -> None:
         if status is None:
             return
-        try:
-            await self.client.edit_message(self.entity, status.id, text[:4000])
-        except Exception:  # noqa: BLE001 - 내용이 같거나 제한 걸린 경우는 무시
-            pass
+        # 내용이 같거나 제한에 걸린 경우가 흔하므로 조용히 넘어간다.
+        await self._call(
+            lambda: self.client.edit_message(self.entity, status.id, text[:4000]),
+            "상태 메시지 수정",
+            quiet=True,
+        )
 
 
 async def run_listen(

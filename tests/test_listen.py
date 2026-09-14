@@ -43,7 +43,12 @@ class FakeEvent:
 
 
 class FakeClient:
-    def __init__(self, fail_send_file: str = "", entity=None, history=None):
+    def __init__(self, fail_send_file: str = "", entity=None, history=None,
+                 hang_send_message: bool = False, fail_reply_send: bool = False,
+                 fail_reply_file: bool = False):
+        self.hang_send_message = hang_send_message
+        self.fail_reply_send = fail_reply_send
+        self.fail_reply_file = fail_reply_file
         self.sent: list = []
         self.edits: list = []
         self.files: list = []
@@ -75,8 +80,12 @@ class FakeClient:
             await handler(FakeEvent(chat_id, message))
 
     async def send_message(self, entity, text, reply_to=None):
-        self._next_id += 1
         self.sent.append((text, reply_to))
+        if self.hang_send_message:
+            await asyncio.sleep(3600)  # 응답이 오지 않는 상황
+        if self.fail_reply_send and reply_to is not None:
+            raise RuntimeError("답장을 보낼 수 없는 대화방")
+        self._next_id += 1
         return FakeMessage(self._next_id, text)
 
     async def edit_message(self, entity, mid, text):
@@ -88,6 +97,8 @@ class FakeClient:
     ):
         if self.fail_send_file:
             raise RuntimeError(self.fail_send_file)
+        if self.fail_reply_file and reply_to is not None:
+            raise RuntimeError("답장으로는 파일을 보낼 수 없음")
         size = os.path.getsize(path)
         if progress_callback:
             progress_callback(size, size)
@@ -371,6 +382,57 @@ def test_seen_memory_is_bounded():
                 service._mark_seen(index)
             assert len(service._seen_ids) <= 2000, "기억이 무한히 늘어나면 안 된다"
             assert service._mark_seen(2999) is False, "최근 것은 기억한다"
+
+    asyncio.run(scenario())
+
+
+# --------------------------------------- 상태 메시지가 막혀도 받고 보내기
+def test_status_hang_does_not_block_download_or_sending():
+    """상태 메시지가 응답하지 않아도 PC 다운로드와 폰 전송은 끝까지 진행돼야 한다."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(hang_send_message=True)
+            service, client, created = build(tmp, client=client)
+            service.status_timeout = 0.1  # 테스트에서 빠르게 시간 초과
+
+            state = await service.process([parse_link("https://t.me/c/1/2")], reply_to=7)
+
+            assert len(state.paths) == 1, "컴퓨터에 파일을 받아야 한다"
+            assert state.paths[0].exists()
+            assert len(client.files) == 1, "폰으로 되돌려 보내야 한다"
+            assert processed_links(created) == 1
+
+    asyncio.run(scenario())
+
+
+def test_status_send_falls_back_to_no_reply():
+    """답장으로 보내는 것이 막히면 답장 없이 다시 시도해야 한다."""
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(fail_reply_send=True)
+            service, client, _ = build(tmp, client=client)
+
+            state = await service.process([parse_link("https://t.me/c/1/2")], reply_to=7)
+
+            attempts = [reply for _, reply in client.sent]
+            assert 7 in attempts, "먼저 답장으로 시도한다"
+            assert None in attempts, "실패하면 답장 없이 다시 시도한다"
+            assert len(state.paths) == 1 and len(client.files) == 1
+
+    asyncio.run(scenario())
+
+
+def test_upload_falls_back_to_no_reply():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeClient(fail_reply_file=True)
+            service, client, _ = build(tmp, client=client)
+
+            state = await service.process([parse_link("https://t.me/c/1/2")], reply_to=7)
+
+            assert len(client.files) == 1, "답장 없이 다시 보내 성공해야 한다"
+            assert client.files[0][3] is None, "재시도는 답장 없이"
+            assert not state.errors, f"실패로 기록되면 안 된다: {state.errors}"
 
     asyncio.run(scenario())
 
