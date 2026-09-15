@@ -225,6 +225,80 @@ def test_help_reply_for_command():
     asyncio.run(scenario())
 
 
+class FakeRouter:
+    """원격 조종 처리기 흉내. 무엇을 받았는지 기록만 한다."""
+
+    def __init__(self, answer: bool = True):
+        self.answer = answer
+        self.seen: list = []
+
+    async def handle(self, text, sender_id=None, reply=None):
+        self.seen.append((text, sender_id))
+        if not self.answer:
+            return False
+        if reply is not None:
+            await reply("🟢 매매봇 실행 중")
+        return True
+
+
+def test_control_command_is_handled_instead_of_help():
+    """`/상태` 같은 명령은 다운로더 도움말이 아니라 원격 조종이 답해야 한다."""
+
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, created = build(tmp)
+            router = FakeRouter()
+            service.commands = router
+            message = FakeMessage(1, "/상태")
+            message.sender_id = 777
+            assert await service.handle_message(message) is False
+            assert router.seen == [("/상태", 777)]
+            assert client.sent and client.sent[0][0] == "🟢 매매봇 실행 중"
+            assert HELP_TEXT not in [text for text, *_ in client.sent]
+            assert service.queue.qsize() == 0
+
+    asyncio.run(scenario())
+
+
+def test_unhandled_command_still_falls_back_to_help():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, _ = build(tmp)
+            service.commands = FakeRouter(answer=False)
+            assert await service.handle_message(FakeMessage(1, "/help")) is False
+            assert client.sent and client.sent[0][0] == HELP_TEXT
+
+    asyncio.run(scenario())
+
+
+def test_links_still_work_while_commands_are_enabled():
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, _client, _ = build(tmp)
+            router = FakeRouter()
+            service.commands = router
+            assert await service.handle_message(FakeMessage(1, "https://t.me/c/1/2")) is True
+            assert service.queue.qsize() == 1, "명령 처리기를 켜면 링크가 막혔다"
+            assert router.seen == [], "링크를 명령으로 넘기면 안 된다"
+
+    asyncio.run(scenario())
+
+
+def test_remote_only_mode_ignores_links():
+    """원격 조종 전용 모드(`remote`)에서는 링크를 받아도 다운로드하지 않는다."""
+
+    async def scenario():
+        with tempfile.TemporaryDirectory() as tmp:
+            service, client, _ = build(tmp)
+            service.commands = FakeRouter()
+            service.handle_links = False
+            assert await service.handle_message(FakeMessage(1, "https://t.me/c/1/2")) is False
+            assert service.queue.qsize() == 0
+            assert client.sent == [], "도움말도 보내지 않는다"
+
+    asyncio.run(scenario())
+
+
 def test_link_is_queued_and_chatter_ignored():
     async def scenario():
         with tempfile.TemporaryDirectory() as tmp:

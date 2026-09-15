@@ -183,12 +183,18 @@ class ListenService:
         poll_interval: float = POLL_INTERVAL,
         catch_up: int = 0,
         debug: bool = False,
+        commands=None,
+        handle_links: bool = True,
     ) -> None:
         self.client = client
         self.console = console
         self.make_downloader = make_downloader
         self.chat = chat
         self.send_back = send_back
+        #: `/명령` 메시지를 처리할 객체(:mod:`tgdl.control`). 없으면 도움말만 답한다.
+        self.commands = commands
+        #: 링크를 받아 다운로드할지. 원격 조종 전용 모드에서는 False.
+        self.handle_links = bool(handle_links)
         self.edit_interval = max(3.0, float(edit_interval))
         #: 알림이 오지 않을 때를 대비한 직접 확인 간격(0 이면 확인하지 않음)
         self.poll_interval = max(0.0, float(poll_interval))
@@ -315,9 +321,18 @@ class ListenService:
             kind = "파일" if has_attachment(message) else "글"
             self.console.log(f"[진단] {source} {kind}메시지 {message_id}: {preview!r}")
 
-        links = links_from_message(message)
+        if self.commands is not None and (text or "").strip().startswith("/"):
+            handled = await self.commands.handle(
+                text,
+                sender_id=getattr(message, "sender_id", None),
+                reply=lambda answer: self._send(answer, reply_to=message_id),
+            )
+            if handled:
+                return False
+
+        links = links_from_message(message) if self.handle_links else []
         if not links:
-            if is_command(text):
+            if self.handle_links and is_command(text):
                 await self._send(HELP_TEXT, reply_to=message_id)
             return False
 
@@ -532,6 +547,7 @@ async def run_listen(
     poll_interval: float = POLL_INTERVAL,
     catch_up: int = 0,
     debug: bool = False,
+    commands=None,
 ) -> None:
     """감시를 시작하고 연결이 끊어질 때까지 기다린다."""
     service = ListenService(
@@ -543,6 +559,7 @@ async def run_listen(
         poll_interval=poll_interval,
         catch_up=catch_up,
         debug=debug,
+        commands=commands,
     )
     await service.start()
 
@@ -556,9 +573,10 @@ async def run_listen(
     console.log("이 창을 닫거나 Ctrl+C 를 누르면 멈춥니다.")
 
     if hello:
-        sent = await service._send(
-            "✅ 다운로더가 켜졌습니다.\n여기에 텔레그램 동영상 링크를 붙여넣으세요."
-        )
+        greeting = "✅ 다운로더가 켜졌습니다.\n여기에 텔레그램 동영상 링크를 붙여넣으세요."
+        if commands is not None:
+            greeting += "\n원격 조종 명령도 함께 받습니다 — /도움"
+        sent = await service._send(greeting)
         if sent is None:
             console.log(
                 "시작 알림을 보내지 못했습니다. 대화방을 잘못 지정했을 수 있습니다.", "warn"

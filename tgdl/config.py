@@ -80,6 +80,23 @@ class Config:
     limit: int = 200  # 메시지 번호 없는 링크에서 탐색할 최대 개수
     proxy: str = ""  # 예: socks5://127.0.0.1:1080  (python-socks 필요)
 
+    # ---- 원격 조종(자동매매 봇 켜고 끄기 · 컴퓨터 전원) ----
+    #: 켜고 끌 프로그램 목록. 예:
+    #: [{"name": "매매봇", "command": "C:\\매매봇\\bot.py", "cwd": "C:\\매매봇"}]
+    programs: list = field(default_factory=list)
+    #: 텔레그램으로 전원(절전·종료·재부팅) 명령을 허용할지. 기본은 허용하지 않는다.
+    allow_power: bool = False
+    #: 명령을 쓸 수 있는 텔레그램 계정 번호. 비우면 내 계정만(자동으로 채운다).
+    allow_senders: list = field(default_factory=list)
+    #: 전원을 내리기 전에 매매봇을 먼저 부드럽게 멈출지
+    stop_bot_first: bool = True
+
+    # ---- 깨우기(Wake-on-LAN) ----
+    wake_mac: str = ""  # 집 컴퓨터 유선 랜카드의 물리적 주소
+    wake_host: str = ""  # 켜졌는지 확인할 주소(집 컴퓨터의 랜 IP)
+    wake_port: int = 0  # 확인에 쓸 포트(예: 3389). 0 이면 ping 으로 확인
+    wake_broadcast: str = ""  # 비우면 자동(255.255.255.255 + 같은 망)
+
     @property
     def ready(self) -> bool:
         return bool(self.api_id) and bool(self.api_hash)
@@ -134,6 +151,20 @@ def load_config() -> Config:
     cfg.connections = max(1, min(16, int(cfg.connections or 4)))
     if cfg.media not in {"video", "all"}:
         cfg.media = "video"
+
+    if not isinstance(cfg.programs, list):
+        cfg.programs = []
+    if not isinstance(cfg.allow_senders, list):
+        cfg.allow_senders = []
+    cfg.allow_power = bool(cfg.allow_power)
+    cfg.stop_bot_first = bool(cfg.stop_bot_first)
+    try:
+        cfg.wake_port = max(0, min(65535, int(cfg.wake_port or 0)))
+    except (TypeError, ValueError):
+        cfg.wake_port = 0
+    env_mac = os.environ.get("TGDL_WAKE_MAC")
+    if env_mac:
+        cfg.wake_mac = env_mac.strip()
     return cfg
 
 
