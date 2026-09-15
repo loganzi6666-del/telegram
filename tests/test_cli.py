@@ -37,6 +37,80 @@ def test_split_argv_commands():
     assert split_argv(["https://t.me/a/1"]) == ("get", ["https://t.me/a/1"])
 
 
+def test_remote_control_commands_are_recognized():
+    assert split_argv(["remote", "--power"]) == ("remote", ["--power"])
+    assert split_argv(["bot", "start"]) == ("bot", ["start"])
+    assert split_argv(["waker", "--mac", "a1b2c3d4e5f6"]) == (
+        "waker",
+        ["--mac", "a1b2c3d4e5f6"],
+    )
+    assert split_argv(["wake"]) == ("wake", [])
+
+
+def test_bot_add_arguments():
+    command, args = parse(["bot", "add", "C:/매매봇/bot.py", "--name", "매매봇", "--cwd", "C:/매매봇"])
+    assert command == "bot"
+    assert args.targets == ["add", "C:/매매봇/bot.py"]
+    assert args.name == "매매봇"
+    assert args.cwd == "C:/매매봇"
+
+
+def test_power_flags():
+    _command, args = parse(["remote", "--power"])
+    assert args.power and not args.no_power
+    _command, args = parse(["remote", "--no-power"])
+    assert args.no_power and not args.power
+    _command, args = parse(["remote"])
+    assert not args.power and not args.no_power
+
+
+def test_wake_arguments():
+    _command, args = parse(
+        ["wake", "--mac", "A1-B2-C3-D4-E5-F6", "--host", "192.168.0.10", "--wake-port", "3389"]
+    )
+    assert args.mac == "A1-B2-C3-D4-E5-F6"
+    assert args.host == "192.168.0.10"
+    assert args.wake_port == 3389
+    assert args.wait == 120.0
+
+
+def test_control_settings_load_from_config_file():
+    import json
+
+    from tgdl.config import load_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "config.json").write_text(
+            json.dumps(
+                {
+                    "api_id": 111,
+                    "api_hash": "x" * 32,
+                    "programs": [{"name": "매매봇", "command": "bot.py"}],
+                    "allow_power": True,
+                    "wake_mac": "A1:B2:C3:D4:E5:F6",
+                    "wake_port": "3389",
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_home = os.environ.get("TGDL_HOME")
+        old_mac = os.environ.pop("TGDL_WAKE_MAC", None)
+        os.environ["TGDL_HOME"] = tmp
+        try:
+            cfg = load_config()
+        finally:
+            if old_home is None:
+                os.environ.pop("TGDL_HOME", None)
+            else:
+                os.environ["TGDL_HOME"] = old_home
+            if old_mac is not None:
+                os.environ["TGDL_WAKE_MAC"] = old_mac
+        assert cfg.programs == [{"name": "매매봇", "command": "bot.py"}]
+        assert cfg.allow_power is True
+        assert cfg.wake_port == 3389, "글자로 적힌 포트도 숫자로 읽어야 한다"
+        assert cfg.stop_bot_first is True
+
+
 def test_links_as_positional_args():
     command, args = parse(["https://t.me/a/1", "https://t.me/c/2/3"])
     assert command == "get"
