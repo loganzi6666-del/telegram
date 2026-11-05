@@ -17,7 +17,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
-from .links import ParsedLink, extract_links
+from .links import LinkError, ParsedLink, extract_links, parse_link
 from .reporter import Reporter, human_size
 
 #: 상태 메시지를 고쳐 쓰는 최소 간격(초). 너무 자주 고치면 텔레그램이 제한한다.
@@ -108,6 +108,85 @@ def video_attributes(info) -> Optional[list]:
             round_message=bool(getattr(info, "round_message", False)),
         )
     ]
+
+
+#: '저장한 메시지'를 뜻하는 말들
+_SELF_WORDS = {"me", "self", "saved", "savedmessages", "저장한메시지", "저장한 메시지"}
+
+
+class ChatNotFound(RuntimeError):
+    """감시할 대화방을 찾을 수 없을 때."""
+
+
+async def resolve_chat(client, chat: str):
+    """감시할 대화방을 찾는다.
+
+    받아들이는 형태: ``me``(저장한 메시지), ``@공개아이디``, 채널 번호,
+    ``t.me`` 링크, 그리고 **채널 이름**(비공개 채널은 이름으로 찾는다).
+    """
+    from telethon.tl.types import PeerChannel
+
+    wanted = (chat or "me").strip()
+    if wanted.lower().replace(" ", "") in {w.replace(" ", "") for w in _SELF_WORDS}:
+        return await client.get_entity("me")
+
+    # t.me 링크로 준 경우
+    if "t.me/" in wanted or wanted.lower().startswith("tg://"):
+        try:
+            link = parse_link(wanted)
+        except LinkError:
+            link = None
+        if link is not None:
+            if link.username:
+                wanted = link.username
+            elif link.channel_id:
+                try:
+                    return await client.get_entity(PeerChannel(int(link.channel_id)))
+                except Exception:  # noqa: BLE001 - 아래에서 대화 목록을 훑는다
+                    return await _find_in_dialogs(client, wanted, int(link.channel_id))
+
+    # 번호로 준 경우 (-100... 또는 그냥 번호)
+    digits = wanted.lstrip("-")
+    if digits.isdigit():
+        raw = int(digits)
+        if wanted.startswith("-100"):
+            raw = int(digits[3:]) if len(digits) > 3 else raw
+        for candidate in (PeerChannel(raw), int(wanted)):
+            try:
+                return await client.get_entity(candidate)
+            except Exception:  # noqa: BLE001
+                continue
+        return await _find_in_dialogs(client, wanted, raw)
+
+    # @아이디 또는 공개 아이디
+    try:
+        return await client.get_entity(wanted)
+    except Exception:  # noqa: BLE001 - 이름으로 찾아본다
+        return await _find_in_dialogs(client, wanted, None)
+
+
+async def _find_in_dialogs(client, wanted: str, channel_id: Optional[int]):
+    """대화 목록을 훑어 번호나 이름이 맞는 대화방을 찾는다."""
+    target = wanted.strip().lower().lstrip("@")
+    partial = None
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        if channel_id is not None and int(getattr(entity, "id", 0) or 0) == channel_id:
+            return entity
+        title = (getattr(entity, "title", None) or getattr(dialog, "name", None) or "")
+        username = getattr(entity, "username", None) or ""
+        if title.strip().lower() == target or username.lower() == target:
+            return entity
+        if partial is None and target and target in title.strip().lower():
+            partial = entity
+    if partial is not None:
+        return partial
+    raise ChatNotFound(
+        f"'{wanted}' 대화방을 찾을 수 없습니다.\n"
+        "  · 비공개 채널이면 내 계정이 가입돼 있어야 하고, 채널 이름을 그대로 적어주세요\n"
+        "    예: python -m tgdl listen --chat \"내 다운로드\"\n"
+        "  · 기본값(저장한 메시지)으로 쓰려면 --chat 을 빼고 실행하세요"
+    )
 
 
 def _is_too_big(exc: Exception) -> bool:
@@ -210,7 +289,7 @@ class ListenService:
     async def start(self) -> None:
         from telethon import events, utils
 
-        self.entity = await self.client.get_entity(self.chat)
+        self.entity = await resolve_chat(self.client, self.chat)
         try:
             self.chat_id = utils.get_peer_id(self.entity)
         except Exception:  # noqa: BLE001 - 못 구해도 알림은 모두 확인한다

@@ -132,7 +132,8 @@ python -m tgdl listen
    - **안드로이드**: '갤러리에 저장' (또는 다운로드 폴더)
 
 ```bash
-python -m tgdl listen --chat @내봇전용채널   # 저장한 메시지 대신 다른 대화방 감시
+python -m tgdl listen --chat "내 다운로드"    # 전용 방(비공개 채널)을 이름으로 지정
+python -m tgdl listen --chat @공개채널아이디   # 공개 채널/봇 대화방
 python -m tgdl listen --no-send             # 컴퓨터에만 받고 되돌려 보내지 않기
 python -m tgdl listen --catch-up            # 시작할 때 최근 메시지의 링크도 처리
 python -m tgdl listen --debug               # 어떤 메시지가 들어오는지 보기
@@ -144,6 +145,9 @@ python -m tgdl listen --poll 30             # 대화방 직접 확인 간격(초
   않습니다(조금 늦게 시작될 뿐입니다).
 - 시작 전에 이미 보내둔 링크는 건드리지 않습니다. 그것까지 받으려면
   `--catch-up` 을 붙이세요.
+- **전용 방을 쓰고 싶으면**: 텔레그램에서 비공개 채널을 하나 만들고
+  `--chat "채널 이름"` 으로 지정하세요. 이름 일부만 적어도 찾습니다.
+  채널 번호나 `t.me/c/...` 링크로도 지정할 수 있습니다.
 - 반응이 없으면 `--debug` 로 실행해 보세요. 메시지가 들어오는지, 대화방
   번호가 맞는지 화면에 표시됩니다.
 
@@ -282,7 +286,7 @@ python -m tgdl
 | `--from-file <파일>` | 링크 목록 파일에서 읽기 |
 | `--proxy socks5://호스트:포트` | 프록시 사용 (`pip install python-socks[asyncio]`) |
 | `--interval <초>` | 클립보드 확인 간격 (기본 1초) |
-| `--chat <대화방>` | `listen`: 감시할 대화방 (기본 `me` = 저장한 메시지) |
+| `--chat <대화방>` | `listen`: 감시할 대화방. 기본 `me`(저장한 메시지), 채널 이름, `@공개아이디`, 채널 번호, `t.me` 링크 |
 | `--no-send` | `listen`: 받은 파일을 되돌려 보내지 않기 |
 | `--catch-up [개수]` | `listen`: 시작할 때 최근 메시지에서 링크 찾기 (기본 20개) |
 | `--poll <초>` | `listen`: 대화방 직접 확인 간격 (기본 15, `0` 이면 끔) |

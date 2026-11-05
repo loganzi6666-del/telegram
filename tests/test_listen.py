@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from telethon.tl.types import (  # noqa: E402
+    Channel,
     MessageMediaDocument,
     MessageMediaWebPage,
     User,
@@ -25,12 +26,14 @@ from tgdl.downloader import MediaInfo  # noqa: E402
 from tgdl.links import parse_link  # noqa: E402
 from tgdl.listen import (  # noqa: E402
     HELP_TEXT,
+    ChatNotFound,
     ListenService,
     RelayReporter,
     RequestState,
     has_attachment,
     is_command,
     links_from_message,
+    resolve_chat,
 )
 from tgdl.reporter import Reporter  # noqa: E402
 
@@ -586,6 +589,72 @@ def test_upload_does_not_resend_after_partial_upload():
             assert len(state.errors) == 1, "한 번만 실패로 기록하고 재전송하지 않는다"
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------------- 감시할 대화방 찾기
+def fake_channel(channel_id: int, title: str):
+    return Channel(
+        id=channel_id, title=title, photo=None, date=None, creator=True, left=False,
+        broadcast=True, verified=False, megagroup=False, restricted=False,
+        signatures=False, min=False, scam=False, has_link=False, has_geo=False,
+        slowmode_enabled=False,
+    )
+
+
+class ChatFinderClient:
+    """get_entity 로는 못 찾고 대화 목록에만 있는 비공개 채널 상황."""
+
+    def __init__(self, channels):
+        self.channels = channels
+
+    async def get_entity(self, chat):
+        if chat == "me":
+            return User(id=555)
+        raise ValueError("찾을 수 없음")
+
+    async def iter_dialogs(self):
+        for entity in self.channels:
+            class Dialog:
+                def __init__(self, entity):
+                    self.entity = entity
+                    self.name = getattr(entity, "title", "")
+
+            yield Dialog(entity)
+
+
+def test_resolve_chat_defaults_to_saved_messages():
+    client = ChatFinderClient([])
+    for value in ("me", "ME", "저장한 메시지", "saved"):
+        entity = asyncio.run(resolve_chat(client, value))
+        assert isinstance(entity, User), value
+
+
+def test_resolve_chat_finds_private_channel_by_name():
+    """비공개 채널은 공개 아이디가 없으므로 이름으로 찾아야 쓸 수 있다."""
+    client = ChatFinderClient([fake_channel(2233445566, "내 다운로드"), fake_channel(99, "잡담방")])
+
+    assert asyncio.run(resolve_chat(client, "내 다운로드")).title == "내 다운로드"
+    assert asyncio.run(resolve_chat(client, "다운로드")).title == "내 다운로드"  # 일부만
+    assert asyncio.run(resolve_chat(client, "  내 다운로드  ")).title == "내 다운로드"
+
+
+def test_resolve_chat_accepts_number_and_link():
+    client = ChatFinderClient([fake_channel(2233445566, "내 다운로드")])
+
+    for value in ("2233445566", "-1002233445566", "https://t.me/c/2233445566/5"):
+        assert asyncio.run(resolve_chat(client, value)).title == "내 다운로드", value
+
+
+def test_resolve_chat_explains_when_missing():
+    client = ChatFinderClient([fake_channel(1, "다른방")])
+    try:
+        asyncio.run(resolve_chat(client, "없는채널"))
+    except ChatNotFound as exc:
+        message = str(exc)
+        assert "없는채널" in message
+        assert "--chat" in message, "어떻게 고쳐야 하는지 알려줘야 한다"
+        return
+    raise AssertionError("찾을 수 없으면 알려줘야 합니다")
 
 
 def main() -> int:
